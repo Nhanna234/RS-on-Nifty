@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-from datetime import datetime
 import io
-from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Alignment, Font
 import streamlit.components.v1 as components
 
@@ -14,14 +12,13 @@ class RSHeatmapScreener:
         self.lookback_months = lookback_months
         self.output_history = output_history
         self.index_ticker = "^NSEI"
-        # New Filter Settings
         self.use_ema = use_ema
         self.cr_threshold = cr_threshold / 100.0
         self.mr_threshold = mr_threshold / 100.0
 
     def fetch_data(self, tickers):
         all_tickers = tickers + [self.index_ticker]
-        # We need 'High' and 'Low' for CR% calculation now
+        # Fetching 3 years to ensure enough data for 12m EMA and 12m RS lookback
         data = yf.download(all_tickers, period="3y", interval="1mo", auto_adjust=True)
         return data
 
@@ -40,29 +37,25 @@ class RSHeatmapScreener:
         for ticker in stock_prices.columns:
             clean_name = ticker.replace(".NS", "")
             
-            # --- APPLY TECHNICAL FILTERS ON LATEST DATA ---
-            latest_idx = stock_prices.index[-1]
+            # --- FILTERS (Applied to the most recent month) ---
             curr_price = stock_prices[ticker].iloc[-1]
             prev_price = stock_prices[ticker].iloc[-2]
             curr_high = high_df[ticker].iloc[-1]
             curr_low = low_df[ticker].iloc[-1]
             
-            # 1. EMA Filter
             if self.use_ema:
                 ema_12 = stock_prices[ticker].ewm(span=12, adjust=False).mean().iloc[-1]
                 if curr_price < ema_12: continue
             
-            # 2. Closing Range (CR%) Filter
             cr_val = (curr_price - curr_low) / (curr_high - curr_low) if curr_high != curr_low else 0
-            if cr_val < self.cr_threshold: continue
+            if (cr_val * 100) < (self.cr_threshold * 100): continue
             
-            # 3. Monthly Return (%MR) Filter
             mr_val = (curr_price / prev_price) - 1
-            if mr_val < self.mr_threshold: continue
+            if (mr_val * 100) < (self.mr_threshold * 100): continue
 
             # --- RS CALCULATION ---
             sector = sector_map.get(clean_name, "N/A")
-            row = {"Symbols": f"NSE:{clean_name},", "Sector": sector}
+            row = {"Symbols": f"NSE:{clean_name}", "Sector": sector}
             has_any_dot = False
             full_rs_series = (stock_prices[ticker] / index_prices).dropna()
 
@@ -86,15 +79,19 @@ class RSHeatmapScreener:
             if has_any_dot:
                 matrix_data.append(row)
         
-        return pd.DataFrame(matrix_data) if matrix_data else pd.DataFrame()
+        if not matrix_data: return pd.DataFrame()
+        
+        # Sort by Sector before returning
+        df = pd.DataFrame(matrix_data)
+        return df.sort_values(by=["Sector", "Symbols"]).reset_index(drop=True)
 
 # --- UI HELPER: COPY BUTTON ---
 def st_copy_to_clipboard(text):
     copy_js = f"""
         <button onclick="copyToClipboard()" style="
             background-color: #1a73e8; color: white; border: none; 
-            padding: 12px 24px; border-radius: 6px; cursor: pointer; 
-            font-weight: 600; margin-bottom: 20px; transition: 0.3s;">
+            padding: 10px 20px; border-radius: 6px; cursor: pointer; 
+            font-weight: 600; margin-bottom: 20px;">
             📋 Copy Symbols for TradingView
         </button>
         <script>
@@ -104,23 +101,22 @@ def st_copy_to_clipboard(text):
             }}
         </script>
     """
-    components.html(copy_js, height=70)
+    components.html(copy_js, height=60)
 
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Alpha RS Pro", layout="wide")
 st.title("🚀 Alpha RS Leaderboard")
 
 with st.sidebar:
-    st.header("⚙️ Core Settings")
+    st.header("⚙️ Settings")
     uploaded_files = st.file_uploader("Upload Sector CSVs", type="csv", accept_multiple_files=True)
     history_range = st.number_input("Display History (Months)", min_value=1, value=6)
     cutoff = st.number_input("RS Threshold %", min_value=50, max_value=100, value=90)
     
     st.header("🎯 Technical Filters")
     use_ema = st.toggle("Price > 12m EMA", value=True)
-    cr_limit = st.number_input("Min Closing Range (CR%)", min_value=0, max_value=100, value=75)
-    mr_limit = st.number_input("Min Monthly Return (%MR)", min_value=0, max_value=100, value=5)
-    
+    cr_limit = st.number_input("Min Closing Range (CR%)", 0, 100, 75)
+    mr_limit = st.number_input("Min Monthly Return (%MR)", 0, 100, 5)
     run_button = st.button("Generate Alpha List", type="primary")
 
 if run_button and uploaded_files:
@@ -136,45 +132,60 @@ if run_button and uploaded_files:
     unique_tickers = [f"{s}.NS" for s in set(all_symbols)]
     
     if unique_tickers:
-        with st.spinner('Applying Technical Filters & Analyzing market leadership...'):
-            # Initialize with new filter parameters
+        with st.spinner('Analyzing...'):
             screener = RSHeatmapScreener(cutoff, 12, history_range, use_ema, cr_limit, mr_limit)
             full_data = screener.fetch_data(unique_tickers)
             matrix_df = screener.generate_matrix(full_data, sector_map)
 
         if not matrix_df.empty:
+            # Add Sl. No after sorting is done
             matrix_df.insert(0, 'Sl. No', range(1, len(matrix_df) + 1))
-            st_copy_to_clipboard("\n".join(matrix_df['Symbols'].tolist()))
+            
+            st_copy_to_clipboard(", ".join(matrix_df['Symbols'].tolist()))
 
-            # UI Styling & Display
+            # UI Display
             display_df = matrix_df.copy()
             month_cols = [c for c in display_df.columns if c not in ['Sl. No', 'Symbols', 'Sector']]
             for col in month_cols:
                 display_df[col] = display_df[col].apply(lambda x: f"{x.split('_')[1]}%" if isinstance(x, str) and "_" in x else "")
 
             def apply_ui_styles(styler):
-                styler.set_table_styles([
-                    {'selector': 'th', 'props': [('font-weight', 'bold'), ('background-color', '#f1f5f9'), ('color', '#475569')]},
-                    {'selector': 'tr:nth-child(even)', 'props': [('background-color', '#f8fafc')]}
-                ])
+                styler.set_table_styles([{'selector': 'th', 'props': [('font-weight', 'bold'), ('background-color', '#f1f5f9')]}])
                 def color_cells(val):
-                    if '100%' in str(val): return 'background-color: #0ea5e9; color: white; font-weight: bold;'
-                    if '%' in str(val): return 'background-color: #10b981; color: white; font-weight: 500;'
+                    if '100%' in str(val): return 'background-color: #0ea5e9; color: white;'
+                    if '%' in str(val): return 'background-color: #10b981; color: white;'
                     return ''
                 return styler.map(color_cells, subset=month_cols)
 
             st.dataframe(apply_ui_styles(display_df.style), hide_index=True, use_container_width=True)
 
-            # Excel Styling (same as original logic)
+            # --- EXCEL EXPORT ENGINE ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 matrix_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
                 ws = writer.sheets['Alpha_RS']
-                # ... [Internal Excel styling logic remains the same]
+                
+                blue_fill = PatternFill(start_color="0EA5E9", fill_type="solid")
+                green_fill = PatternFill(start_color="10B981", fill_type="solid")
+                header_fill = PatternFill(start_color="0F172A", fill_type="solid")
+                
+                # Format Headers
                 for cell in ws[1]:
-                    cell.fill, cell.font, cell.alignment = PatternFill(start_color="0F172A", fill_type="solid"), Font(color="FFFFFF", bold=True), Alignment(horizontal='center')
-                # (Excel loop logic follows same pattern as your provided file)
+                    cell.fill, cell.font, cell.alignment = header_fill, Font(color="FFFFFF", bold=True), Alignment(horizontal='center')
+
+                # Format Rows and Apply Colors based on TAGS
+                for row in ws.iter_rows(min_row=2):
+                    for cell in row:
+                        cell.alignment = Alignment(horizontal='center')
+                        val = str(cell.value) if cell.value else ""
+                        if "_" in val:
+                            tag, num = val.split("_")
+                            cell.value = int(num) / 100.0
+                            cell.number_format = '0%'
+                            cell.font = Font(color="FFFFFF")
+                            cell.fill = blue_fill if tag == "CYAN" else green_fill
+
+                ws.column_dimensions['B'].width = 20
+                ws.column_dimensions['C'].width = 25
 
             st.download_button(label="📥 Download Styled Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
-        else:
-            st.warning("No stocks met the selected filtration criteria.")
