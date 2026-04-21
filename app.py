@@ -18,7 +18,7 @@ class RSHeatmapScreener:
 
     def fetch_data(self, tickers):
         all_tickers = tickers + [self.index_ticker]
-        # Fetching 3 years to ensure enough data for 12m EMA and 12m RS lookback
+        # Fetching 3 years for technical indicators and RS history
         data = yf.download(all_tickers, period="3y", interval="1mo", auto_adjust=True)
         return data
 
@@ -30,6 +30,7 @@ class RSHeatmapScreener:
         index_prices = price_df[self.index_ticker]
         stock_prices = price_df.drop(columns=[self.index_ticker])
         
+        # Chronological target months
         target_months = sorted(stock_prices.index[-self.output_history:])
         month_headers = [d.strftime('%b-%y') for d in target_months]
         
@@ -37,7 +38,7 @@ class RSHeatmapScreener:
         for ticker in stock_prices.columns:
             clean_name = ticker.replace(".NS", "")
             
-            # --- FILTERS (Applied to the most recent month) ---
+            # --- TECHNICAL FILTERS ---
             curr_price = stock_prices[ticker].iloc[-1]
             prev_price = stock_prices[ticker].iloc[-2]
             curr_high = high_df[ticker].iloc[-1]
@@ -48,10 +49,10 @@ class RSHeatmapScreener:
                 if curr_price < ema_12: continue
             
             cr_val = (curr_price - curr_low) / (curr_high - curr_low) if curr_high != curr_low else 0
-            if (cr_val * 100) < (self.cr_threshold * 100): continue
+            if (cr_val * 100) < self.cr_threshold: continue
             
             mr_val = (curr_price / prev_price) - 1
-            if (mr_val * 100) < (self.mr_threshold * 100): continue
+            if (mr_val * 100) < self.mr_threshold: continue
 
             # --- RS CALCULATION ---
             sector = sector_map.get(clean_name, "N/A")
@@ -81,8 +82,13 @@ class RSHeatmapScreener:
         
         if not matrix_data: return pd.DataFrame()
         
-        # Sort by Sector before returning
         df = pd.DataFrame(matrix_data)
+        # FORCE CHRONOLOGICAL COLUMN ORDER
+        # Fixed cols + existing months in the order they were created in month_headers
+        cols_in_df = [m for m in month_headers if m in df.columns]
+        final_col_order = ["Symbols", "Sector"] + cols_in_df
+        
+        df = df[final_col_order]
         return df.sort_values(by=["Sector", "Symbols"]).reset_index(drop=True)
 
 # --- UI HELPER: COPY BUTTON ---
@@ -132,18 +138,17 @@ if run_button and uploaded_files:
     unique_tickers = [f"{s}.NS" for s in set(all_symbols)]
     
     if unique_tickers:
-        with st.spinner('Analyzing...'):
+        with st.spinner('Analyzing market data...'):
             screener = RSHeatmapScreener(cutoff, 12, history_range, use_ema, cr_limit, mr_limit)
             full_data = screener.fetch_data(unique_tickers)
             matrix_df = screener.generate_matrix(full_data, sector_map)
 
         if not matrix_df.empty:
-            # Add Sl. No after sorting is done
+            # Insert Sl. No after sorting and column ordering
             matrix_df.insert(0, 'Sl. No', range(1, len(matrix_df) + 1))
-            
             st_copy_to_clipboard(", ".join(matrix_df['Symbols'].tolist()))
 
-            # UI Display
+            # UI Display Styling
             display_df = matrix_df.copy()
             month_cols = [c for c in display_df.columns if c not in ['Sl. No', 'Symbols', 'Sector']]
             for col in month_cols:
@@ -159,7 +164,7 @@ if run_button and uploaded_files:
 
             st.dataframe(apply_ui_styles(display_df.style), hide_index=True, use_container_width=True)
 
-            # --- EXCEL EXPORT ENGINE ---
+            # --- EXCEL EXPORT ENGINE (FIXED COLORING) ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 matrix_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
@@ -169,23 +174,24 @@ if run_button and uploaded_files:
                 green_fill = PatternFill(start_color="10B981", fill_type="solid")
                 header_fill = PatternFill(start_color="0F172A", fill_type="solid")
                 
-                # Format Headers
                 for cell in ws[1]:
                     cell.fill, cell.font, cell.alignment = header_fill, Font(color="FFFFFF", bold=True), Alignment(horizontal='center')
 
-                # Format Rows and Apply Colors based on TAGS
                 for row in ws.iter_rows(min_row=2):
                     for cell in row:
                         cell.alignment = Alignment(horizontal='center')
                         val = str(cell.value) if cell.value else ""
-                        if "_" in val:
+                        if isinstance(val, str) and "_" in val:
                             tag, num = val.split("_")
                             cell.value = int(num) / 100.0
                             cell.number_format = '0%'
-                            cell.font = Font(color="FFFFFF")
+                            cell.font = Font(color="FFFFFF", bold=True)
                             cell.fill = blue_fill if tag == "CYAN" else green_fill
 
                 ws.column_dimensions['B'].width = 20
                 ws.column_dimensions['C'].width = 25
+                for i in range(4, ws.max_column + 1): ws.column_dimensions[chr(64 + i)].width = 12
 
             st.download_button(label="📥 Download Styled Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
+        else:
+            st.warning("No stocks passed the technical filters.")
