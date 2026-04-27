@@ -110,14 +110,14 @@ def st_copy_to_clipboard(text):
     components.html(copy_js, height=60)
 
 # --- STREAMLIT UI ---
-st.set_page_config(page_title="Alpha RS Pro", layout="wide")
-st.title("🚀 Alpha RS Leaderboard")
+st.set_page_config(page_title="Abdullah RS Pro", layout="wide")
+st.title("🚀 Abdullah RS Leaderboard")
 
 with st.sidebar:
     st.header("⚙️ Settings")
     uploaded_files = st.file_uploader("Upload Sector CSVs", type="csv", accept_multiple_files=True)
     history_range = st.number_input("Display History (Months)", min_value=1, value=6)
-    cutoff = st.number_input("RS Threshold %", min_value=50, max_value=100, value=90)
+    cutoff = st.number_input("RS Threshold %", min_value=50, max_value=100, value=95)
     
     st.header("🎯 Technical Filters")
     use_ema = st.toggle("Price > 12m EMA", value=True)
