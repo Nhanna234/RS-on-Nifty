@@ -156,6 +156,9 @@ if run_button and uploaded_files:
                     matrix_df = pd.DataFrame(final_rows)
 
             if not matrix_df.empty:
+                # --- SORTING BY SECTOR THEN SYMBOLS ---
+                matrix_df = matrix_df.sort_values(by=["Sector", "Symbols"]).reset_index(drop=True)
+                
                 base_cols = ["Symbols", "Sector"]
                 available_months = [m for m in month_headers if m in matrix_df.columns]
                 weekly_col = ["Weekly CR%"] if "Weekly CR%" in matrix_df.columns else []
@@ -179,7 +182,7 @@ if run_button and uploaded_files:
 
                 st.dataframe(apply_ui_styles(display_df.style), hide_index=True, use_container_width=True)
                 
-                # --- CORRECTED EXCEL EXPORT ENGINE ---
+                # Excel Export
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     matrix_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
