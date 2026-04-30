@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import io
+from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment, Font
 import streamlit.components.v1 as components
 
@@ -28,7 +29,6 @@ class RSHeatmapScreener:
         high_df = full_data['High']
         low_df = full_data['Low']
         
-        # Ensure chronological order (Oldest to Newest)
         target_months = sorted(stock_prices.index[-self.output_history:])
         month_headers = [d.strftime('%b-%y') for d in target_months]
         
@@ -36,7 +36,7 @@ class RSHeatmapScreener:
         for ticker in stock_prices.columns:
             clean_name = ticker.replace(".NS", "")
             
-            # --- MONTHLY TECHNICAL FILTERS ---
+            # MONTHLY FILTERS
             curr_price = stock_prices[ticker].iloc[-1]
             prev_price = stock_prices[ticker].iloc[-2]
             curr_high = high_df[ticker].iloc[-1]
@@ -52,7 +52,6 @@ class RSHeatmapScreener:
             mr_val = (curr_price / prev_price) - 1
             if (mr_val * 100) < self.mr_threshold: continue
 
-            # --- RS CALCULATION ---
             sector = sector_map.get(clean_name, "N/A")
             row = {"Symbols": f"NSE:{clean_name}", "Sector": sector}
             has_any_dot = False
@@ -143,36 +142,29 @@ if run_button and uploaded_files:
                 with st.spinner('Phase 2: Drilling down to Weekly...'):
                     shortlisted_tickers = [s.split(":")[1] + ".NS" for s in matrix_df['Symbols'].tolist()]
                     weekly_data = screener.fetch_data(shortlisted_tickers, interval="1wk", period="6mo")
-                    
                     final_rows = []
                     for _, m_row in matrix_df.iterrows():
                         t_name = m_row['Symbols'].split(":")[1] + ".NS"
                         if t_name in weekly_data['Close'].columns:
-                            w_close = weekly_data['Close'][t_name].dropna()
-                            w_high = weekly_data['High'][t_name].dropna()
-                            w_low = weekly_data['Low'][t_name].dropna()
-                            
+                            w_close, w_high, w_low = weekly_data['Close'][t_name].dropna(), weekly_data['High'][t_name].dropna(), weekly_data['Low'][t_name].dropna()
                             if len(w_close) >= 2:
                                 w_return = (w_close.iloc[-1] / w_close.iloc[-2] - 1) * 100
                                 w_cr = ((w_close.iloc[-1] - w_low.iloc[-1]) / (w_high.iloc[-1] - w_low.iloc[-1]) * 100) if w_high.iloc[-1] != w_low.iloc[-1] else 0
-                                
                                 if w_return > weekly_ret_req and w_cr > weekly_cr_req:
                                     m_row['Weekly CR%'] = f"{int(w_cr)}%"
                                     final_rows.append(m_row)
                     matrix_df = pd.DataFrame(final_rows)
 
             if not matrix_df.empty:
-                # --- FINAL COLUMN REORDERING ---
-                # Symbols, Sector, [Months in order], Weekly CR% (if exists)
                 base_cols = ["Symbols", "Sector"]
                 available_months = [m for m in month_headers if m in matrix_df.columns]
                 weekly_col = ["Weekly CR%"] if "Weekly CR%" in matrix_df.columns else []
                 matrix_df = matrix_df[base_cols + available_months + weekly_col]
-                
                 matrix_df.insert(0, 'Sl. No', range(1, len(matrix_df) + 1))
+                
                 st_copy_to_clipboard(", ".join(matrix_df['Symbols'].tolist()))
 
-                # UI Display Styling
+                # UI Display
                 display_df = matrix_df.copy()
                 for col in available_months:
                     display_df[col] = display_df[col].apply(lambda x: f"{x.split('_')[1]}%" if isinstance(x, str) and "_" in x else "")
@@ -187,10 +179,30 @@ if run_button and uploaded_files:
 
                 st.dataframe(apply_ui_styles(display_df.style), hide_index=True, use_container_width=True)
                 
-                # Excel Export (Openpyxl)
+                # --- CORRECTED EXCEL EXPORT ENGINE ---
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     matrix_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
-                st.download_button(label="📥 Download Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
+                    ws = writer.sheets['Alpha_RS']
+                    
+                    blue_fill = PatternFill(start_color="0EA5E9", fill_type="solid")
+                    green_fill = PatternFill(start_color="10B981", fill_type="solid")
+                    header_fill = PatternFill(start_color="0F172A", fill_type="solid")
+                    
+                    for cell in ws[1]:
+                        cell.fill, cell.font, cell.alignment = header_fill, Font(color="FFFFFF", bold=True), Alignment(horizontal='center')
+
+                    for row in ws.iter_rows(min_row=2):
+                        for cell in row:
+                            cell.alignment = Alignment(horizontal='center')
+                            val = str(cell.value) if cell.value else ""
+                            if "_" in val:
+                                tag, num = val.split("_")
+                                cell.value = int(num) / 100.0
+                                cell.number_format = '0%'
+                                cell.font = Font(color="FFFFFF", bold=True)
+                                cell.fill = blue_fill if tag == "CYAN" else green_fill
+
+                st.download_button(label="📥 Download Styled Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
         else:
             st.warning("No stocks passed the filters.")
