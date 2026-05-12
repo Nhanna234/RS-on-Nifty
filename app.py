@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import io
+from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment, Font
 import streamlit.components.v1 as components
 
@@ -13,8 +14,8 @@ class RSHeatmapScreener:
         self.output_history = output_history
         self.index_ticker = "^NSEI"
         self.use_ema = use_ema
-        self.cr_threshold = cr_threshold
-        self.mr_threshold = mr_threshold
+        self.cr_threshold = cr_threshold / 100.0
+        self.mr_threshold = mr_threshold / 100.0
 
     def fetch_data(self, tickers, interval="1mo", period="3y"):
         all_tickers = tickers + [self.index_ticker]
@@ -78,11 +79,21 @@ class RSHeatmapScreener:
         
         return pd.DataFrame(matrix_data), month_headers
 
-# [UI Helper code remains the same as your app.py]
+# --- UI HELPER ---
 def st_copy_to_clipboard(text):
     copy_js = f"""
-        <button onclick="copyToClipboard()" style="background-color: #1a73e8; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; margin-bottom: 20px;">📋 Copy Symbols for TradingView</button>
-        <script>function copyToClipboard() {{ const text = `{text}`; navigator.clipboard.writeText(text).then(() => {{ alert('Symbols copied!'); }}); }}</script>
+        <button onclick="copyToClipboard()" style="
+            background-color: #1a73e8; color: white; border: none; 
+            padding: 10px 20px; border-radius: 6px; cursor: pointer; 
+            font-weight: 600; margin-bottom: 20px;">
+            📋 Copy Symbols for TradingView
+        </button>
+        <script>
+            function copyToClipboard() {{
+                const text = `{text}`;
+                navigator.clipboard.writeText(text).then(() => {{ alert('Symbols copied!'); }});
+            }}
+        </script>
     """
     components.html(copy_js, height=60)
 
@@ -98,10 +109,10 @@ with st.sidebar:
     
     st.header("🎯 Technical Filters")
     use_ema = st.toggle("Price > 12m EMA", value=True)
-    cr_limit = st.number_input("Min Monthly Range (CR%)", 0, 100, 75)
+    cr_limit = st.number_input("Min Closing Range (CR%)", 0, 100, 75)
     mr_limit = st.number_input("Min Monthly Return (%MR)", 0, 100, 5)
     
-    st.header("🔍 Weekly Drill-Down")
+    st.header("📅 Weekly Drill-Down")
     enable_weekly = st.toggle("Apply Weekly Filter", value=False)
     weekly_cr_req = 75
     weekly_ret_req = 4
@@ -127,50 +138,31 @@ if run_button and uploaded_files:
             matrix_df, month_headers = screener.generate_matrix(monthly_data, sector_map)
 
         if not matrix_df.empty:
-            with st.spinner('Phase 2: Calculating Daily CR% and Weekly Filters...'):
-                shortlisted_tickers = [s.split(":")[1] + ".NS" for s in matrix_df['Symbols'].tolist()]
-                # Fetching Weekly for filter AND Daily for the new column
-                weekly_data = screener.fetch_data(shortlisted_tickers, interval="1wk", period="6mo")
-                daily_data = yf.download(shortlisted_tickers, period="5d", interval="1d", auto_adjust=True)
-                
-                final_rows = []
-                for _, m_row in matrix_df.iterrows():
-                    t_name = m_row['Symbols'].split(":")[1] + ".NS"
-                    
-                    # 1. Get Daily CR% (Always added in Phase 2)
-                    try:
-                        d_ticker = daily_data.xs(t_name, axis=1, level=1).dropna().iloc[-1]
-                        d_cr = ((d_ticker['Close'] - d_ticker['Low']) / (d_ticker['High'] - d_ticker['Low']) * 100) if d_ticker['High'] != d_ticker['Low'] else 0
-                        m_row['Daily CR%'] = f"{round(d_cr, 1)}%"
-                    except:
-                        m_row['Daily CR%'] = "N/A"
-
-                    # 2. Apply Weekly Filter if enabled
-                    if enable_weekly:
+            if enable_weekly:
+                with st.spinner('Phase 2: Drilling down to Weekly...'):
+                    shortlisted_tickers = [s.split(":")[1] + ".NS" for s in matrix_df['Symbols'].tolist()]
+                    weekly_data = screener.fetch_data(shortlisted_tickers, interval="1wk", period="6mo")
+                    final_rows = []
+                    for _, m_row in matrix_df.iterrows():
+                        t_name = m_row['Symbols'].split(":")[1] + ".NS"
                         if t_name in weekly_data['Close'].columns:
-                            w_close = weekly_data['Close'][t_name].dropna()
-                            w_high = weekly_data['High'][t_name].dropna()
-                            w_low = weekly_data['Low'][t_name].dropna()
+                            w_close, w_high, w_low = weekly_data['Close'][t_name].dropna(), weekly_data['High'][t_name].dropna(), weekly_data['Low'][t_name].dropna()
                             if len(w_close) >= 2:
                                 w_return = (w_close.iloc[-1] / w_close.iloc[-2] - 1) * 100
                                 w_cr = ((w_close.iloc[-1] - w_low.iloc[-1]) / (w_high.iloc[-1] - w_low.iloc[-1]) * 100) if w_high.iloc[-1] != w_low.iloc[-1] else 0
                                 if w_return > weekly_ret_req and w_cr > weekly_cr_req:
+                                    m_row['Weekly CR%'] = f"{int(w_cr)}%"
                                     final_rows.append(m_row)
-                    else:
-                        final_rows.append(m_row)
-                
-                matrix_df = pd.DataFrame(final_rows)
+                    matrix_df = pd.DataFrame(final_rows)
 
             if not matrix_df.empty:
+                # --- SORTING BY SECTOR THEN SYMBOLS ---
                 matrix_df = matrix_df.sort_values(by=["Sector", "Symbols"]).reset_index(drop=True)
                 
-                # Column Ordering: Months in middle, Daily CR on the far right
                 base_cols = ["Symbols", "Sector"]
                 available_months = [m for m in month_headers if m in matrix_df.columns]
-                # Any other calculation columns like Daily CR% go to the end
-                other_cols = ["Daily CR%"]
-                
-                matrix_df = matrix_df[base_cols + available_months + other_cols]
+                weekly_col = ["Weekly CR%"] if "Weekly CR%" in matrix_df.columns else []
+                matrix_df = matrix_df[base_cols + available_months + weekly_col]
                 matrix_df.insert(0, 'Sl. No', range(1, len(matrix_df) + 1))
                 
                 st_copy_to_clipboard(", ".join(matrix_df['Symbols'].tolist()))
@@ -184,22 +176,25 @@ if run_button and uploaded_files:
                     styler.set_table_styles([{'selector': 'th', 'props': [('font-weight', 'bold'), ('background-color', '#f1f5f9')]}])
                     def color_cells(val):
                         if '100%' in str(val): return 'background-color: #0ea5e9; color: white;'
-                        if '%' in str(val) and "_" in str(val): return 'background-color: #10b981; color: white;'
+                        if '%' in str(val) and val != "": return 'background-color: #10b981; color: white;'
                         return ''
                     return styler.map(color_cells, subset=available_months)
 
                 st.dataframe(apply_ui_styles(display_df.style), hide_index=True, use_container_width=True)
                 
-                # Excel Export (Coloring logic remains the same)
+                # Excel Export
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     matrix_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
                     ws = writer.sheets['Alpha_RS']
-                    # ... [Standard Excel styling logic]
+                    
+                    blue_fill = PatternFill(start_color="0EA5E9", fill_type="solid")
+                    green_fill = PatternFill(start_color="10B981", fill_type="solid")
                     header_fill = PatternFill(start_color="0F172A", fill_type="solid")
+                    
                     for cell in ws[1]:
                         cell.fill, cell.font, cell.alignment = header_fill, Font(color="FFFFFF", bold=True), Alignment(horizontal='center')
-                    
+
                     for row in ws.iter_rows(min_row=2):
                         for cell in row:
                             cell.alignment = Alignment(horizontal='center')
@@ -208,8 +203,8 @@ if run_button and uploaded_files:
                                 tag, num = val.split("_")
                                 cell.value = int(num) / 100.0
                                 cell.number_format = '0%'
-                                cell.fill = PatternFill(start_color="0EA5E9" if tag=="CYAN" else "10B981", fill_type="solid")
-                                cell.font = Font(color="FFFFFF")
+                                cell.font = Font(color="FFFFFF", bold=True)
+                                cell.fill = blue_fill if tag == "CYAN" else green_fill
 
                 st.download_button(label="📥 Download Styled Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
         else:
