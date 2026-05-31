@@ -52,8 +52,11 @@ class RSHeatmapScreener:
             mr_val = (curr_price / prev_price) - 1
             if (mr_val * 100) < self.mr_threshold: continue
 
-            sector = sector_map.get(clean_name, "N/A")
-            row = {"Symbols": f"NSE:{clean_name}", "Sector": sector}
+            # Extract mapping details safely
+            sector = sector_map.get(clean_name, {}).get("Sector", "N/A")
+            isin_val = sector_map.get(clean_name, {}).get("ISIN", "")
+
+            row = {"Symbols": f"NSE:{clean_name}", "Sector": sector, "ISIN_Hidden": isin_val}
             has_any_dot = False
             full_rs_series = (stock_prices[ticker] / index_prices).dropna()
 
@@ -81,25 +84,12 @@ class RSHeatmapScreener:
 
 # --- UI HELPER ---
 def st_copy_to_clipboard(text):
-    copy_js = f"""
-        <button onclick="copyToClipboard()" style="
-            background-color: #1a73e8; color: white; border: none; 
-            padding: 10px 20px; border-radius: 6px; cursor: pointer; 
-            font-weight: 600; margin-bottom: 20px;">
-            📋 Copy Symbols for TradingView
-        </button>
-        <script>
-            function copyToClipboard() {{
-                const text = `{text}`;
-                navigator.clipboard.writeText(text).then(() => {{ alert('Symbols copied!'); }});
-            }}
-        </script>
-    """
+    copy_js = f'<button onclick="copyToClipboard()" style="background-color: #1a73e8; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; margin-bottom: 20px;">📋 Copy Symbols for TradingView</button><script>function copyToClipboard() {{const text = `{text}`;navigator.clipboard.writeText(text).then(() => {{ alert("Symbols copied!"); }});}}</script>'
     components.html(copy_js, height=60)
 
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Abdullah RS Pro", layout="wide")
-st.title("🚀 Abdullah RS Leaderboard")
+st.title("📈 Abdullah RS Leaderboard")
 
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -107,12 +97,12 @@ with st.sidebar:
     history_range = st.number_input("Display History (Months)", min_value=1, value=6)
     cutoff = st.number_input("RS Threshold %", min_value=50, max_value=100, value=95)
     
-    st.header("🎯 Technical Filters")
+    st.header("🔍 Technical Filters")
     use_ema = st.toggle("Price > 12m EMA", value=True)
     cr_limit = st.number_input("Min Closing Range (CR%)", 0, 100, 75)
     mr_limit = st.number_input("Min Monthly Return (%MR)", 0, 100, 5)
     
-    st.header("📅 Weekly Drill-Down")
+    st.header("🗓️ Weekly Drill-Down")
     enable_weekly = st.toggle("Apply Weekly Filter", value=False)
     weekly_cr_req = 75
     weekly_ret_req = 4
@@ -124,9 +114,13 @@ if run_button and uploaded_files:
     for f in uploaded_files:
         df_temp = pd.read_csv(f)
         if 'Symbols' in df_temp.columns and 'Sector' in df_temp.columns:
+            has_isin = 'ISIN' in df_temp.columns
             for _, row in df_temp.iterrows():
-                s, sec = str(row['Symbols']).strip(), str(row['Sector']).strip()
-                sector_map[s] = sec
+                s = str(row['Symbols']).strip()
+                sec = str(row['Sector']).strip()
+                isin_code = str(row['ISIN']).strip() if has_isin else ""
+                
+                sector_map[s] = {"Sector": sec, "ISIN": isin_code}
                 all_symbols.append(s)
     
     unique_tickers = [f"{s}.NS" for s in set(all_symbols)]
@@ -139,9 +133,11 @@ if run_button and uploaded_files:
 
         if not matrix_df.empty:
             if enable_weekly:
-                with st.spinner('Phase 2: Drilling down to Weekly...'):
+                with st.spinner('Phase 2: Drilling down to Weekly & Daily metrics...'):
                     shortlisted_tickers = [s.split(":")[1] + ".NS" for s in matrix_df['Symbols'].tolist()]
                     weekly_data = screener.fetch_data(shortlisted_tickers, interval="1wk", period="6mo")
+                    daily_data = screener.fetch_data(shortlisted_tickers, interval="1d", period="1mo")
+                    
                     final_rows = []
                     for _, m_row in matrix_df.iterrows():
                         t_name = m_row['Symbols'].split(":")[1] + ".NS"
@@ -150,8 +146,28 @@ if run_button and uploaded_files:
                             if len(w_close) >= 2:
                                 w_return = (w_close.iloc[-1] / w_close.iloc[-2] - 1) * 100
                                 w_cr = ((w_close.iloc[-1] - w_low.iloc[-1]) / (w_high.iloc[-1] - w_low.iloc[-1]) * 100) if w_high.iloc[-1] != w_low.iloc[-1] else 0
+                                
                                 if w_return > weekly_ret_req and w_cr > weekly_cr_req:
                                     m_row['Weekly CR%'] = f"{int(w_cr)}%"
+                                    
+                                    if t_name in daily_data['Close'].columns:
+                                        d_close = daily_data['Close'][t_name].dropna()
+                                        d_high = daily_data['High'][t_name].dropna()
+                                        d_low = daily_data['Low'][t_name].dropna()
+                                        
+                                        if len(d_close) >= 2:
+                                            d_cr = ((d_close.iloc[-1] - d_low.iloc[-1]) / (d_high.iloc[-1] - d_low.iloc[-1]) * 100) if d_high.iloc[-1] != d_low.iloc[-1] else 0
+                                            d_change = (d_close.iloc[-1] / d_close.iloc[-2] - 1) * 100
+                                            
+                                            m_row['Daily CR%'] = f"{int(d_cr)}%"
+                                            m_row['Daily % Change'] = f"{d_change:.2f}%"
+                                        else:
+                                            m_row['Daily CR%'] = ""
+                                            m_row['Daily % Change'] = ""
+                                    else:
+                                        m_row['Daily CR%'] = ""
+                                        m_row['Daily % Change'] = ""
+                                        
                                     final_rows.append(m_row)
                     matrix_df = pd.DataFrame(final_rows)
 
@@ -159,16 +175,43 @@ if run_button and uploaded_files:
                 # --- SORTING BY SECTOR THEN SYMBOLS ---
                 matrix_df = matrix_df.sort_values(by=["Sector", "Symbols"]).reset_index(drop=True)
                 
+                # Extract identifiers
+                symbols_list = matrix_df['Symbols'].tolist()
+                isin_list = [str(i).strip() for i in matrix_df['ISIN_Hidden'].tolist() if pd.notna(i) and str(i).strip() != ""]
+                
+                # Render action area layout
+                col_btn1, col_btn2 = st.columns([1, 4])
+                with col_btn1:
+                    st_copy_to_clipboard(", ".join(symbols_list))
+                with col_btn2:
+                    isin_df = pd.DataFrame({"ISIN": isin_list})
+                    # header=False completely removes the "ISIN" column name row
+                    isin_csv = isin_df.to_csv(index=False, header=False).encode('utf-8')
+                    st.download_button(
+                        label="💳 Download ISIN CSV",
+                        data=isin_csv,
+                        file_name="Shortlisted_ISINs.csv",
+                        mime="text/csv"
+                    )
+
+                # Build clean display table
                 base_cols = ["Symbols", "Sector"]
                 available_months = [m for m in month_headers if m in matrix_df.columns]
-                weekly_col = ["Weekly CR%"] if "Weekly CR%" in matrix_df.columns else []
-                matrix_df = matrix_df[base_cols + available_months + weekly_col]
-                matrix_df.insert(0, 'Sl. No', range(1, len(matrix_df) + 1))
                 
-                st_copy_to_clipboard(", ".join(matrix_df['Symbols'].tolist()))
+                additional_cols = []
+                if "Weekly CR%" in matrix_df.columns:
+                    additional_cols.append("Weekly CR%")
+                if "Daily CR%" in matrix_df.columns:
+                    additional_cols.append("Daily CR%")
+                if "Daily % Change" in matrix_df.columns:
+                    additional_cols.append("Daily % Change")
+                    
+                final_cols_to_keep = base_cols + available_months + additional_cols
+                export_df = matrix_df[final_cols_to_keep].copy()
+                export_df.insert(0, 'Sl. No', range(1, len(export_df) + 1))
 
-                # UI Display
-                display_df = matrix_df.copy()
+                # UI Display Clean Up
+                display_df = export_df.copy()
                 for col in available_months:
                     display_df[col] = display_df[col].apply(lambda x: f"{x.split('_')[1]}%" if isinstance(x, str) and "_" in x else "")
 
@@ -185,7 +228,7 @@ if run_button and uploaded_files:
                 # Excel Export
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    matrix_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
+                    export_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
                     ws = writer.sheets['Alpha_RS']
                     
                     blue_fill = PatternFill(start_color="0EA5E9", fill_type="solid")
@@ -206,6 +249,6 @@ if run_button and uploaded_files:
                                 cell.font = Font(color="FFFFFF", bold=True)
                                 cell.fill = blue_fill if tag == "CYAN" else green_fill
 
-                st.download_button(label="📥 Download Styled Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
+                st.download_button(label="📋 Download Styled Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
         else:
             st.warning("No stocks passed the filters.")
