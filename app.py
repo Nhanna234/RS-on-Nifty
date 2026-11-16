@@ -2,9 +2,115 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import io
+import requests
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment, Font
 import streamlit.components.v1 as components
+
+# --- STANDARD INDEX UNIVERSES ---
+# Official NSE Indices constituent files (columns: Company Name, Industry, Symbol, Series, ISIN Code)
+INDEX_FILES = {
+    "Nifty 50": "ind_nifty50list.csv",
+    "Nifty 100": "ind_nifty100list.csv",
+    "Nifty 200": "ind_nifty200list.csv",
+    "Nifty LargeMidcap 250": "ind_niftylargemidcap250list.csv",
+    "Nifty Midcap 150": "ind_niftymidcap150list.csv",
+    "Nifty Smallcap 100": "ind_niftysmallcap100list.csv",
+    "Nifty Smallcap 250": "ind_niftysmallcap250list.csv",
+    "Nifty Microcap 250": "ind_niftymicrocap250_list.csv",
+    "Nifty 500": "ind_nifty500list.csv",
+    "Nifty Total Market": "ind_niftytotalmarket_list.csv",
+}
+DEFAULT_INDEX = "Nifty Total Market"
+CONSTITUENT_MIRRORS = [
+    "https://niftyindices.com/IndexConstituent/{f}",
+    "https://www.niftyindices.com/IndexConstituent/{f}",
+    "https://nsearchives.nseindia.com/content/indices/{f}",
+]
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+
+def clean_symbol(s):
+    """'NSE:tcs', 'TCS.NS', ' tcs ' -> 'TCS'"""
+    s = str(s).strip().upper()
+    if s.startswith("NSE:"):
+        s = s[4:]
+    if s.endswith(".NS"):
+        s = s[:-3]
+    return s
+
+
+def _download_index_csv(fname):
+    """Try each mirror in turn; return the raw constituent table."""
+    errors = []
+    for m in CONSTITUENT_MIRRORS:
+        url = m.format(f=fname)
+        try:
+            r = requests.get(url, headers={"User-Agent": UA, "Accept": "text/csv,*/*"}, timeout=25)
+            r.raise_for_status()
+            df = pd.read_csv(io.StringIO(r.text))
+            df.columns = [str(c).strip() for c in df.columns]
+            if "Symbol" not in df.columns or len(df) == 0:
+                raise ValueError("file has no 'Symbol' column or is empty")
+            return df
+        except Exception as e:
+            errors.append(f"{url}: {e}")
+    raise RuntimeError("\n".join(errors))
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def load_index_constituents(index_name):
+    """Returns (table with Symbol / Industry / ISIN Code, note on where it came from)."""
+    try:
+        df = _download_index_csv(INDEX_FILES[index_name])
+        note = "official NSE Indices list"
+    except Exception as first_error:
+        # Two indices can be rebuilt exactly from other lists (NSE's own definitions)
+        if index_name == "Nifty Total Market":      # = Nifty 500 + Nifty Microcap 250
+            df = pd.concat([_download_index_csv(INDEX_FILES["Nifty 500"]),
+                            _download_index_csv(INDEX_FILES["Nifty Microcap 250"])])
+            note = "built from Nifty 500 + Nifty Microcap 250 lists"
+        elif index_name == "Nifty Midcap 150":      # = Nifty LargeMidcap 250 minus Nifty 100
+            lm = _download_index_csv(INDEX_FILES["Nifty LargeMidcap 250"])
+            n100 = _download_index_csv(INDEX_FILES["Nifty 100"])
+            df = lm[~lm["Symbol"].map(clean_symbol).isin(set(n100["Symbol"].map(clean_symbol)))]
+            note = "built from Nifty LargeMidcap 250 minus Nifty 100 lists"
+        else:
+            raise RuntimeError(f"Could not download the {index_name} list.\n{first_error}")
+    if "Series" in df.columns:
+        df = df[df["Series"].astype(str).str.strip().isin(["EQ", "BE", "BZ"])]
+    for c in ("Industry", "ISIN Code"):
+        if c not in df.columns:
+            df[c] = ""
+    df = df.copy()
+    df["Symbol"] = df["Symbol"].map(clean_symbol)
+    return df.drop_duplicates("Symbol")[["Symbol", "Industry", "ISIN Code"]].reset_index(drop=True), note
+
+
+def read_uploaded_universe(files):
+    """Accepts the original format (Symbols, Sector, ISIN) and the NSE format (Symbol, Industry, ISIN Code)."""
+    sector_map, symbols = {}, []
+    for f in files:
+        df_temp = pd.read_csv(f)
+        df_temp.columns = [str(c).strip() for c in df_temp.columns]
+        sym_col = next((c for c in ("Symbols", "Symbol") if c in df_temp.columns), None)
+        if sym_col is None:
+            continue
+        sec_col = next((c for c in ("Sector", "Industry") if c in df_temp.columns), None)
+        isin_col = next((c for c in ("ISIN", "ISIN Code") if c in df_temp.columns), None)
+        for _, row in df_temp.iterrows():
+            if pd.isna(row[sym_col]):
+                continue
+            s = clean_symbol(row[sym_col])
+            if not s:
+                continue
+            sec = str(row[sec_col]).strip() if sec_col and pd.notna(row[sec_col]) else "N/A"
+            isin_code = str(row[isin_col]).strip() if isin_col and pd.notna(row[isin_col]) else ""
+            sector_map[s] = {"Sector": sec, "ISIN": isin_code}
+            symbols.append(s)
+    return sector_map, symbols
+
 
 # --- RS LOGIC ENGINE ---
 class RSHeatmapScreener:
@@ -93,9 +199,16 @@ st.title("📈 Abdullah RS Leaderboard")
 
 with st.sidebar:
     st.header("⚙️ Settings")
-    uploaded_files = st.file_uploader("Upload Sector CSVs", type="csv", accept_multiple_files=True)
+    index_name = st.selectbox("Stock Universe (Index)", list(INDEX_FILES),
+                              index=list(INDEX_FILES).index(DEFAULT_INDEX))
+    uploaded_files = st.file_uploader(
+        "Optional: upload your own CSV(s)", type="csv", accept_multiple_files=True,
+        help="If a file is uploaded, its stocks are used INSTEAD of the index selected above. "
+             "Columns: Symbols, Sector, ISIN (or the NSE format: Symbol, Industry, ISIN Code).")
+    if uploaded_files:
+        st.caption("Uploaded file is in use; the index selection above is ignored.")
     history_range = st.number_input("Display History (Months)", min_value=1, value=6)
-    cutoff = st.number_input("RS Threshold %", min_value=50, max_value=100, value=95)
+    cutoff = st.number_input("RS Threshold %", min_value=50, max_value=100, value=100)
     
     st.header("🔍 Technical Filters")
     use_ema = st.toggle("Price > 12m EMA", value=True)
@@ -109,23 +222,35 @@ with st.sidebar:
     
     run_button = st.button("Generate Alpha List", type="primary")
 
-if run_button and uploaded_files:
+if run_button:
     sector_map, all_symbols = {}, []
-    for f in uploaded_files:
-        df_temp = pd.read_csv(f)
-        if 'Symbols' in df_temp.columns and 'Sector' in df_temp.columns:
-            has_isin = 'ISIN' in df_temp.columns
-            for _, row in df_temp.iterrows():
-                s = str(row['Symbols']).strip()
-                sec = str(row['Sector']).strip()
-                isin_code = str(row['ISIN']).strip() if has_isin else ""
-                
+    universe_label = ""
+    if uploaded_files:
+        # Uploaded stocks supersede the index list
+        sector_map, all_symbols = read_uploaded_universe(uploaded_files)
+        universe_label = "uploaded CSV"
+        if not all_symbols:
+            st.error("The uploaded file has no 'Symbols' (or 'Symbol') column, or it is empty. "
+                     "Fix the file, or remove it to run on the selected index.")
+    else:
+        try:
+            with st.spinner(f"Fetching {index_name} constituents..."):
+                const_df, source_note = load_index_constituents(index_name)
+            for _, row in const_df.iterrows():
+                s = row["Symbol"]
+                sec = str(row["Industry"]).strip() if pd.notna(row["Industry"]) and str(row["Industry"]).strip() else "N/A"
+                isin_code = str(row["ISIN Code"]).strip() if pd.notna(row["ISIN Code"]) else ""
                 sector_map[s] = {"Sector": sec, "ISIN": isin_code}
                 all_symbols.append(s)
-    
-    unique_tickers = [f"{s}.NS" for s in set(all_symbols)]
-    
+            universe_label = f"{index_name} ({source_note})"
+        except Exception as e:
+            st.error(f"Could not load the {index_name} stock list from NSE. "
+                     f"Try again, or upload a CSV instead.\n\n{e}")
+
+    unique_tickers = [f"{s}.NS" for s in sorted(set(all_symbols))]
+
     if unique_tickers:
+        st.caption(f"Universe: {universe_label} | {len(unique_tickers)} stocks")
         with st.spinner('Phase 1: Analyzing Monthly RS...'):
             screener = RSHeatmapScreener(cutoff, 12, history_range, use_ema, cr_limit, mr_limit)
             monthly_data = screener.fetch_data(unique_tickers, interval="1mo")
@@ -251,4 +376,4 @@ if run_button and uploaded_files:
 
                 st.download_button(label="📋 Download Styled Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
         else:
-            st.warning("No stocks passed the filters.")
+            st.warning("No stocks passed the filters.")
