@@ -126,7 +126,26 @@ class RSHeatmapScreener:
     def fetch_data(self, tickers, interval="1mo", period="3y"):
         all_tickers = tickers + [self.index_ticker]
         data = yf.download(all_tickers, period=period, interval=interval, auto_adjust=True)
+        if interval == "1mo":
+            data = self.one_row_per_month(data)
         return data
+
+    @staticmethod
+    def one_row_per_month(data):
+        """Yahoo sometimes returns two rows for the same month (the month's bar plus a
+        stray row dated today, filled for only some tickers). Merge them so every month
+        appears exactly once: High = highest, Low = lowest, Close = latest available."""
+        if data is None or data.empty:
+            return data
+        idx = pd.DatetimeIndex(data.index)
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+        month = idx.to_period("M")
+        how = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+        fields = [f for f in how if f in data.columns.get_level_values(0)]
+        merged = pd.concat({f: data[f].groupby(month).agg(how[f]) for f in fields}, axis=1)
+        merged.index = merged.index.to_timestamp()
+        return merged
 
     def generate_matrix(self, full_data, sector_map):
         price_df = full_data['Close'].dropna(how='all')
