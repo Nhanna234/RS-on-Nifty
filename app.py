@@ -2,8 +2,12 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import io
+import base64
+import math
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import requests
-from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment, Font
 import streamlit.components.v1 as components
 
@@ -207,192 +211,255 @@ class RSHeatmapScreener:
         
         return pd.DataFrame(matrix_data), month_headers
 
-# --- UI HELPER ---
-def st_copy_to_clipboard(text):
-    copy_js = f'<button onclick="copyToClipboard()" style="background-color: #1a73e8; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; margin-bottom: 20px;">📋 Copy Symbols for TradingView</button><script>function copyToClipboard() {{const text = `{text}`;navigator.clipboard.writeText(text).then(() => {{ alert("Symbols copied!"); }});}}</script>'
-    components.html(copy_js, height=60)
+# --- RESULT BUILDER (prepares everything the React dashboard shows) ---
+LOOKBACK_MONTHS = 12        # RS is compared with its highest month-end value of the past 12 months
+RS_TRAIL_MONTHS = 24        # length of the RS line drawn for each stock
+WEEKLY_CR_REQ = 75
+WEEKLY_RET_REQ = 4
+IST = timezone(timedelta(hours=5, minutes=30))
 
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="Abdullah RS Pro", layout="wide")
-st.title("📈 Abdullah RS Leaderboard")
 
-with st.sidebar:
-    st.header("⚙️ Settings")
-    index_name = st.selectbox("Stock Universe (Index)", list(INDEX_FILES),
-                              index=list(INDEX_FILES).index(DEFAULT_INDEX))
-    uploaded_files = st.file_uploader(
-        "Optional: upload your own CSV(s)", type="csv", accept_multiple_files=True,
-        help="If a file is uploaded, its stocks are used INSTEAD of the index selected above. "
-             "Columns: Symbols, Sector, ISIN (or the NSE format: Symbol, Industry, ISIN Code).")
-    if uploaded_files:
-        st.caption("Uploaded file is in use; the index selection above is ignored.")
-    history_range = st.number_input("Display History (Months)", min_value=1, value=6)
-    cutoff = st.number_input("RS Threshold %", min_value=50, max_value=100, value=100)
-    
-    st.header("🔍 Technical Filters")
-    use_ema = st.toggle("Price > 12m EMA", value=True)
-    cr_limit = st.number_input("Min Closing Range (CR%)", 0, 100, 75)
-    mr_limit = st.number_input("Min Monthly Return (%MR)", 0, 100, 5)
-    
-    st.header("🗓️ Weekly Drill-Down")
-    enable_weekly = st.toggle("Apply Weekly Filter", value=False)
-    weekly_cr_req = 75
-    weekly_ret_req = 4
-    
-    run_button = st.button("Generate Alpha List", type="primary")
+def _num(x, nd=2):
+    """Plain rounded number, or None for missing values (keeps the data JSON-safe)."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return round(x, nd) if math.isfinite(x) else None
 
-if run_button:
-    sector_map, all_symbols = {}, []
-    universe_label = ""
-    if uploaded_files:
-        # Uploaded stocks supersede the index list
-        sector_map, all_symbols = read_uploaded_universe(uploaded_files)
-        universe_label = "uploaded CSV"
+
+def apply_weekly_filter(screener, matrix_df):
+    """Phase 2 of the original app: keep stocks whose latest week is strong; add daily figures."""
+    shortlisted_tickers = [s.split(":")[1] + ".NS" for s in matrix_df['Symbols'].tolist()]
+    weekly_data = screener.fetch_data(shortlisted_tickers, interval="1wk", period="6mo")
+    daily_data = screener.fetch_data(shortlisted_tickers, interval="1d", period="1mo")
+
+    final_rows = []
+    for _, m_row in matrix_df.iterrows():
+        t_name = m_row['Symbols'].split(":")[1] + ".NS"
+        if t_name in weekly_data['Close'].columns:
+            w_close, w_high, w_low = weekly_data['Close'][t_name].dropna(), weekly_data['High'][t_name].dropna(), weekly_data['Low'][t_name].dropna()
+            if len(w_close) >= 2:
+                w_return = (w_close.iloc[-1] / w_close.iloc[-2] - 1) * 100
+                w_cr = ((w_close.iloc[-1] - w_low.iloc[-1]) / (w_high.iloc[-1] - w_low.iloc[-1]) * 100) if w_high.iloc[-1] != w_low.iloc[-1] else 0
+
+                if w_return > WEEKLY_RET_REQ and w_cr > WEEKLY_CR_REQ:
+                    m_row['Weekly CR%'] = f"{int(w_cr)}%"
+                    m_row['Daily CR%'] = ""
+                    m_row['Daily % Change'] = ""
+                    if t_name in daily_data['Close'].columns:
+                        d_close = daily_data['Close'][t_name].dropna()
+                        d_high = daily_data['High'][t_name].dropna()
+                        d_low = daily_data['Low'][t_name].dropna()
+                        if len(d_close) >= 2:
+                            d_cr = ((d_close.iloc[-1] - d_low.iloc[-1]) / (d_high.iloc[-1] - d_low.iloc[-1]) * 100) if d_high.iloc[-1] != d_low.iloc[-1] else 0
+                            d_change = (d_close.iloc[-1] / d_close.iloc[-2] - 1) * 100
+                            m_row['Daily CR%'] = f"{int(d_cr)}%"
+                            m_row['Daily % Change'] = f"{d_change:.2f}%"
+                    final_rows.append(m_row)
+    return pd.DataFrame(final_rows)
+
+
+def build_excel(matrix_df, month_headers):
+    """The styled Excel report of the original app, returned as bytes."""
+    available_months = [m for m in month_headers if m in matrix_df.columns]
+    additional_cols = [c for c in ("Weekly CR%", "Daily CR%", "Daily % Change") if c in matrix_df.columns]
+    export_df = matrix_df[["Symbols", "Sector"] + available_months + additional_cols].copy()
+    export_df.insert(0, 'Sl. No', range(1, len(export_df) + 1))
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        export_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
+        ws = writer.sheets['Alpha_RS']
+
+        blue_fill = PatternFill(start_color="0EA5E9", fill_type="solid")
+        green_fill = PatternFill(start_color="10B981", fill_type="solid")
+        header_fill = PatternFill(start_color="0F172A", fill_type="solid")
+
+        for cell in ws[1]:
+            cell.fill, cell.font, cell.alignment = header_fill, Font(color="FFFFFF", bold=True), Alignment(horizontal='center')
+
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(horizontal='center')
+                val = str(cell.value) if cell.value else ""
+                if "_" in val:
+                    tag, num = val.split("_")
+                    cell.value = int(num) / 100.0
+                    cell.number_format = '0%'
+                    cell.font = Font(color="FFFFFF", bold=True)
+                    cell.fill = blue_fill if tag == "CYAN" else green_fill
+    return output.getvalue()
+
+
+def describe_stocks(screener, monthly_data, matrix_df, month_headers):
+    """Display detail for each shortlisted stock. The shortlist itself comes from the RS engine;
+    nothing here changes which stocks qualify."""
+    price_df = monthly_data['Close'].dropna(how='all')
+    index_prices = price_df[screener.index_ticker]
+    high_df, low_df = monthly_data['High'], monthly_data['Low']
+    target_months = sorted(price_df.index[-screener.output_history:])
+    n = screener.lookback_months
+
+    stocks = []
+    for _, r in matrix_df.iterrows():
+        name = r['Symbols'].split(":")[1]
+        ticker = name + ".NS"
+        px = price_df[ticker]
+        rs = (px / index_prices).dropna()
+
+        # one cell per displayed month: RS as % of its 12-month high, and whether the engine marked it
+        cells = []
+        for d, header in zip(target_months, month_headers):
+            val = None
+            if d in rs.index:
+                i = rs.index.get_loc(d)
+                if i >= n:
+                    val = _num(rs.loc[d] / rs.iloc[i - n + 1: i + 1].max() * 100, 1)
+            tag = r.get(header)
+            marked = isinstance(tag, str) and "_" in tag
+            cells.append({"v": val, "q": marked, "high": marked and tag.startswith("CYAN")})
+
+        streak = 0
+        for c in reversed(cells):
+            if not c["q"]:
+                break
+            streak += 1
+
+        trail = rs.iloc[-RS_TRAIL_MONTHS:]
+        trail_high = rs.rolling(n, min_periods=1).max().iloc[-RS_TRAIL_MONTHS:]
+        base = trail.iloc[0] if len(trail) else float("nan")
+
+        curr, prev = px.iloc[-1], px.iloc[-2]
+        hi, lo = high_df[ticker].iloc[-1], low_df[ticker].iloc[-1]
+        ema_12 = px.ewm(span=12, adjust=False).mean().iloc[-1]
+
+        stocks.append({
+            "symbol": name,
+            "sector": r['Sector'],
+            "isin": r['ISIN_Hidden'] if isinstance(r['ISIN_Hidden'], str) else "",
+            "cells": cells,
+            "streak": streak,
+            "hits": sum(1 for c in cells if c["q"]),
+            "price": _num(curr),
+            "monthReturn": _num((curr / prev - 1) * 100, 1),
+            "closingRange": _num((curr - lo) / (hi - lo) * 100, 0) if hi != lo else 0,
+            "emaGap": _num((curr / ema_12 - 1) * 100, 1),
+            "trail": {
+                "labels": [d.strftime('%b-%y') for d in trail.index],
+                "rs": [_num(v / base * 100, 1) for v in trail],
+                "high": [_num(v / base * 100, 1) for v in trail_high],
+            },
+            "weeklyCR": r.get("Weekly CR%") if isinstance(r.get("Weekly CR%"), str) else None,
+            "dailyCR": r.get("Daily CR%") if isinstance(r.get("Daily CR%"), str) else None,
+            "dailyChange": r.get("Daily % Change") if isinstance(r.get("Daily % Change"), str) else None,
+        })
+    return stocks
+
+
+def run_screen(req):
+    """Runs the whole screen for one request from the dashboard and returns a JSON-safe result."""
+    index_name = req.get("index") if req.get("index") in INDEX_FILES else DEFAULT_INDEX
+    history = int(req.get("history", 6))
+    cutoff = float(req.get("threshold", 100))
+    use_ema = bool(req.get("useEma", True))
+    cr_limit = float(req.get("cr", 75))
+    mr_limit = float(req.get("mr", 5))
+    enable_weekly = bool(req.get("weekly", False))
+    csv_files = req.get("csvFiles") or []
+
+    # 1. universe: an uploaded list replaces the index
+    if csv_files:
+        sector_map, all_symbols = read_uploaded_universe([io.StringIO(f.get("text", "")) for f in csv_files])
+        universe_name, universe_source = ", ".join(f.get("name", "CSV") for f in csv_files), "your uploaded list"
         if not all_symbols:
-            st.error("The uploaded file has no 'Symbols' (or 'Symbol') column, or it is empty. "
-                     "Fix the file, or remove it to run on the selected index.")
+            return {"ok": False, "error": "The uploaded file has no 'Symbols' (or 'Symbol') column, or it is empty. "
+                                          "Fix the file, or remove it to run on the selected index."}
     else:
         try:
-            with st.spinner(f"Fetching {index_name} constituents..."):
-                const_df, source_note = load_index_constituents(index_name)
-            for _, row in const_df.iterrows():
-                s = row["Symbol"]
-                sec = str(row["Industry"]).strip() if pd.notna(row["Industry"]) and str(row["Industry"]).strip() else "N/A"
-                isin_code = str(row["ISIN Code"]).strip() if pd.notna(row["ISIN Code"]) else ""
-                sector_map[s] = {"Sector": sec, "ISIN": isin_code}
-                all_symbols.append(s)
-            universe_label = f"{index_name} ({source_note})"
+            const_df, universe_source = load_index_constituents(index_name)
         except Exception as e:
-            st.error(f"Could not load the {index_name} stock list from NSE. "
-                     f"Try again, or upload a CSV instead.\n\n{e}")
+            return {"ok": False, "error": f"Could not load the {index_name} stock list from NSE. "
+                                          f"Run it again, or upload your own CSV. ({e})"}
+        sector_map, all_symbols = {}, []
+        for _, row in const_df.iterrows():
+            s = row["Symbol"]
+            sec = str(row["Industry"]).strip() if pd.notna(row["Industry"]) and str(row["Industry"]).strip() else "N/A"
+            isin_code = str(row["ISIN Code"]).strip() if pd.notna(row["ISIN Code"]) else ""
+            sector_map[s] = {"Sector": sec, "ISIN": isin_code}
+            all_symbols.append(s)
+        universe_name = index_name
 
-    unique_tickers = [f"{s}.NS" for s in sorted(set(all_symbols))]
+    symbols = sorted(set(all_symbols))
+    unique_tickers = [f"{s}.NS" for s in symbols]
 
-    if unique_tickers:
-        st.caption(f"Universe: {universe_label} | {len(unique_tickers)} stocks")
-        with st.spinner('Phase 1: Analyzing Monthly RS...'):
-            screener = RSHeatmapScreener(cutoff, 12, history_range, use_ema, cr_limit, mr_limit)
-            monthly_data = screener.fetch_data(unique_tickers, interval="1mo")
-            matrix_df, month_headers = screener.generate_matrix(monthly_data, sector_map)
+    # 2. the RS engine (unchanged)
+    screener = RSHeatmapScreener(cutoff, LOOKBACK_MONTHS, history, use_ema, cr_limit, mr_limit)
+    monthly_data = screener.fetch_data(unique_tickers, interval="1mo")
+    if monthly_data is None or monthly_data.empty or screener.index_ticker not in monthly_data['Close'].columns:
+        return {"ok": False, "error": "Yahoo Finance returned no price data. It may be throttling requests; "
+                                      "wait a minute and run the screen again."}
+    matrix_df, month_headers = screener.generate_matrix(monthly_data, sector_map)
+    if not matrix_df.empty and enable_weekly:
+        matrix_df = apply_weekly_filter(screener, matrix_df)
 
-        if not matrix_df.empty:
-            if enable_weekly:
-                with st.spinner('Phase 2: Drilling down to Weekly & Daily metrics...'):
-                    shortlisted_tickers = [s.split(":")[1] + ".NS" for s in matrix_df['Symbols'].tolist()]
-                    weekly_data = screener.fetch_data(shortlisted_tickers, interval="1wk", period="6mo")
-                    daily_data = screener.fetch_data(shortlisted_tickers, interval="1d", period="1mo")
-                    
-                    final_rows = []
-                    for _, m_row in matrix_df.iterrows():
-                        t_name = m_row['Symbols'].split(":")[1] + ".NS"
-                        if t_name in weekly_data['Close'].columns:
-                            w_close, w_high, w_low = weekly_data['Close'][t_name].dropna(), weekly_data['High'][t_name].dropna(), weekly_data['Low'][t_name].dropna()
-                            if len(w_close) >= 2:
-                                w_return = (w_close.iloc[-1] / w_close.iloc[-2] - 1) * 100
-                                w_cr = ((w_close.iloc[-1] - w_low.iloc[-1]) / (w_high.iloc[-1] - w_low.iloc[-1]) * 100) if w_high.iloc[-1] != w_low.iloc[-1] else 0
-                                
-                                if w_return > weekly_ret_req and w_cr > weekly_cr_req:
-                                    m_row['Weekly CR%'] = f"{int(w_cr)}%"
-                                    
-                                    if t_name in daily_data['Close'].columns:
-                                        d_close = daily_data['Close'][t_name].dropna()
-                                        d_high = daily_data['High'][t_name].dropna()
-                                        d_low = daily_data['Low'][t_name].dropna()
-                                        
-                                        if len(d_close) >= 2:
-                                            d_cr = ((d_close.iloc[-1] - d_low.iloc[-1]) / (d_high.iloc[-1] - d_low.iloc[-1]) * 100) if d_high.iloc[-1] != d_low.iloc[-1] else 0
-                                            d_change = (d_close.iloc[-1] / d_close.iloc[-2] - 1) * 100
-                                            
-                                            m_row['Daily CR%'] = f"{int(d_cr)}%"
-                                            m_row['Daily % Change'] = f"{d_change:.2f}%"
-                                        else:
-                                            m_row['Daily CR%'] = ""
-                                            m_row['Daily % Change'] = ""
-                                    else:
-                                        m_row['Daily CR%'] = ""
-                                        m_row['Daily % Change'] = ""
-                                        
-                                    final_rows.append(m_row)
-                    matrix_df = pd.DataFrame(final_rows)
+    now = datetime.now(IST)
+    last_month = monthly_data['Close'].dropna(how='all').index[-1]
+    result = {
+        "ok": True,
+        "universe": {"name": universe_name, "source": universe_source, "count": len(symbols)},
+        "asOf": now.strftime("%d %b %Y, %H:%M IST"),
+        "months": month_headers,
+        "monthInProgress": (last_month.year, last_month.month) == (now.year, now.month),
+        "settings": {"history": history, "threshold": cutoff, "useEma": use_ema, "cr": cr_limit,
+                     "mr": mr_limit, "weekly": enable_weekly},
+        "sectorTotals": dict(Counter(sector_map[s]["Sector"] for s in symbols)),
+        "stocks": [],
+        "excel": None,
+    }
+    if matrix_df.empty:
+        return result
 
-            if not matrix_df.empty:
-                # --- SORTING BY SECTOR THEN SYMBOLS ---
-                matrix_df = matrix_df.sort_values(by=["Sector", "Symbols"]).reset_index(drop=True)
-                
-                # Extract identifiers
-                symbols_list = matrix_df['Symbols'].tolist()
-                isin_list = [str(i).strip() for i in matrix_df['ISIN_Hidden'].tolist() if pd.notna(i) and str(i).strip() != ""]
-                
-                # Render action area layout
-                col_btn1, col_btn2 = st.columns([1, 4])
-                with col_btn1:
-                    st_copy_to_clipboard(", ".join(symbols_list))
-                with col_btn2:
-                    isin_df = pd.DataFrame({"ISIN": isin_list})
-                    # header=False completely removes the "ISIN" column name row
-                    isin_csv = isin_df.to_csv(index=False, header=False).encode('utf-8')
-                    st.download_button(
-                        label="💳 Download ISIN CSV",
-                        data=isin_csv,
-                        file_name="Shortlisted_ISINs.csv",
-                        mime="text/csv"
-                    )
+    matrix_df = matrix_df.sort_values(by=["Sector", "Symbols"]).reset_index(drop=True)
+    result["stocks"] = describe_stocks(screener, monthly_data, matrix_df, month_headers)
+    result["excel"] = base64.b64encode(build_excel(matrix_df, month_headers)).decode("ascii")
+    return result
 
-                # Build clean display table
-                base_cols = ["Symbols", "Sector"]
-                available_months = [m for m in month_headers if m in matrix_df.columns]
-                
-                additional_cols = []
-                if "Weekly CR%" in matrix_df.columns:
-                    additional_cols.append("Weekly CR%")
-                if "Daily CR%" in matrix_df.columns:
-                    additional_cols.append("Daily CR%")
-                if "Daily % Change" in matrix_df.columns:
-                    additional_cols.append("Daily % Change")
-                    
-                final_cols_to_keep = base_cols + available_months + additional_cols
-                export_df = matrix_df[final_cols_to_keep].copy()
-                export_df.insert(0, 'Sl. No', range(1, len(export_df) + 1))
 
-                # UI Display Clean Up
-                display_df = export_df.copy()
-                for col in available_months:
-                    display_df[col] = display_df[col].apply(lambda x: f"{x.split('_')[1]}%" if isinstance(x, str) and "_" in x else "")
+# --- PAGE (the interface is the React app in frontend/, built into frontend/dist) ---
+st.set_page_config(page_title="Abdullah RS Pro", layout="wide", initial_sidebar_state="collapsed")
+st.markdown("""
+<style>
+  header[data-testid="stHeader"], [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"],
+  [data-testid="stToolbar"], footer { display: none !important; }
+  .stApp { background: #E8EEF1; }
+  .block-container, [data-testid="stMainBlockContainer"] { padding: 0 !important; max-width: 100% !important; }
+  iframe { display: block; }
+</style>
+""", unsafe_allow_html=True)
 
-                def apply_ui_styles(styler):
-                    styler.set_table_styles([{'selector': 'th', 'props': [('font-weight', 'bold'), ('background-color', '#f1f5f9')]}])
-                    def color_cells(val):
-                        if '100%' in str(val): return 'background-color: #0ea5e9; color: white;'
-                        if '%' in str(val) and val != "": return 'background-color: #10b981; color: white;'
-                        return ''
-                    return styler.map(color_cells, subset=available_months)
+FRONTEND_DIR = Path(__file__).parent / "frontend" / "dist"
+if not (FRONTEND_DIR / "index.html").exists():
+    st.error("The dashboard files are missing (frontend/dist). Build them with: cd frontend && npm install && npm run build")
+    st.stop()
 
-                st.dataframe(apply_ui_styles(display_df.style), hide_index=True, use_container_width=True)
-                
-                # Excel Export
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    export_df.to_excel(writer, index=False, sheet_name='Alpha_RS')
-                    ws = writer.sheets['Alpha_RS']
-                    
-                    blue_fill = PatternFill(start_color="0EA5E9", fill_type="solid")
-                    green_fill = PatternFill(start_color="10B981", fill_type="solid")
-                    header_fill = PatternFill(start_color="0F172A", fill_type="solid")
-                    
-                    for cell in ws[1]:
-                        cell.fill, cell.font, cell.alignment = header_fill, Font(color="FFFFFF", bold=True), Alignment(horizontal='center')
+rs_dashboard = components.declare_component("rs_dashboard", path=str(FRONTEND_DIR))
 
-                    for row in ws.iter_rows(min_row=2):
-                        for cell in row:
-                            cell.alignment = Alignment(horizontal='center')
-                            val = str(cell.value) if cell.value else ""
-                            if "_" in val:
-                                tag, num = val.split("_")
-                                cell.value = int(num) / 100.0
-                                cell.number_format = '0%'
-                                cell.font = Font(color="FFFFFF", bold=True)
-                                cell.fill = blue_fill if tag == "CYAN" else green_fill
+request = rs_dashboard(
+    indices=list(INDEX_FILES),
+    defaults={"index": DEFAULT_INDEX, "history": 6, "threshold": 100, "useEma": True, "cr": 75, "mr": 5, "weekly": False},
+    result=st.session_state.get("result"),
+    key="rs_dashboard",
+    default=None,
+)
 
-                st.download_button(label="📋 Download Styled Report", data=output.getvalue(), file_name="Alpha_RS_Report.xlsx")
-        else:
-            st.warning("No stocks passed the filters.")
+# A new request carries a new id; results are kept in the session so they survive reruns
+if request and request.get("nonce") and request["nonce"] != st.session_state.get("last_nonce"):
+    st.session_state["last_nonce"] = request["nonce"]
+    try:
+        outcome = run_screen(request)
+    except Exception as e:
+        outcome = {"ok": False, "error": f"The screen stopped with an error: {type(e).__name__}: {e}"}
+    outcome["nonce"] = request["nonce"]
+    st.session_state["result"] = outcome
+    st.rerun()
