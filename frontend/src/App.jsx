@@ -1,62 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { connect, embedded, sendValue, setFrameHeight } from "./streamlit";
 import { SAMPLE_ARGS, sampleResult } from "./sample";
-
-/* ---------- small helpers ---------- */
-const num = (v, d = 1) =>
-  v == null ? "–" : v.toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
-const signedPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${num(v)}%`);
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-
-function downloadBlob(name, blob) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
-
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    let ok = false;
-    try {
-      ok = document.execCommand("copy");
-    } catch {
-      ok = false;
-    }
-    ta.remove();
-    return ok;
-  }
-}
-
-function useWidth() {
-  const ref = useRef(null);
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    if (!ref.current) return undefined;
-    const ro = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
-    ro.observe(ref.current);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, width];
-}
+import { num, signedPct, plural, downloadBlob, copyText, useWidth } from "./util";
+import Backtest from "./Backtest.jsx";
 
 /* ---------- app shell ---------- */
 export default function App() {
   const [args, setArgs] = useState(embedded ? null : SAMPLE_ARGS);
-  const [running, setRunning] = useState(null);
+  const [running, setRunning] = useState(null); // { kind, nonce }
+  const [tab, setTab] = useState("screen");
   const rootRef = useRef(null);
 
   useEffect(() => (embedded ? connect(setArgs) : undefined), []);
@@ -72,41 +24,73 @@ export default function App() {
   }, []);
 
   const result = args?.result || null;
+  const btResult = args?.btResult || null;
   useEffect(() => {
-    if (running && result && result.nonce === running) setRunning(null);
-  }, [running, result]);
+    if (!running) return;
+    const done = running.kind === "backtest" ? btResult : result;
+    if (done && done.nonce === running.nonce) setRunning(null);
+  }, [running, result, btResult]);
 
-  const run = (settings, csvFiles) => {
+  const run = (kind, settings, csvFiles) => {
     const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    setRunning(nonce);
-    if (embedded) sendValue({ nonce, ...settings, csvFiles });
-    else setTimeout(() => setArgs((a) => ({ ...a, result: sampleResult(nonce, settings) })), 900);
+    setRunning({ kind, nonce });
+    if (embedded) sendValue({ nonce, kind, ...settings, csvFiles });
+    else
+      setTimeout(
+        () =>
+          setArgs((a) =>
+            kind === "backtest"
+              ? { ...a, btResult: { ok: false, nonce, error: "Backtests run in the Python app. Start it with: streamlit run app.py" } }
+              : { ...a, result: sampleResult(nonce, settings) }
+          ),
+        900
+      );
   };
+
+  const screenRunning = running?.kind === "screen";
+  const btRunning = running?.kind === "backtest";
 
   return (
     <div className="app" ref={rootRef}>
       <header className="masthead">
         <h1 className="wordmark">Abdullah RS Leaderboard</h1>
+        <nav className="tabs" aria-label="Sections">
+          <button type="button" className={tab === "screen" ? "on" : ""} aria-current={tab === "screen"} onClick={() => setTab("screen")}>
+            Screener
+          </button>
+          <button type="button" className={tab === "backtest" ? "on" : ""} aria-current={tab === "backtest"} onClick={() => setTab("backtest")}>
+            Backtest
+          </button>
+        </nav>
         <p className="masthead-note">Relative strength against the Nifty 50, from month-end closes. Prices from Yahoo Finance.</p>
       </header>
 
       {!args ? (
         <p className="quiet-note">Loading the screen…</p>
+      ) : tab === "backtest" ? (
+        <Backtest
+          indices={args.indices}
+          defaults={args.btDefaults}
+          result={btResult}
+          running={btRunning}
+          busy={Boolean(running)}
+          onRun={(settings, files) => run("backtest", settings, files)}
+        />
       ) : (
         <>
-          <Controls indices={args.indices} defaults={args.defaults} running={Boolean(running)} onRun={run} />
-          {running && (
+          <Controls indices={args.indices} defaults={args.defaults} running={Boolean(running)} onRun={(st, f) => run("screen", st, f)} />
+          {screenRunning && (
             <div className="banner banner-run" role="status">
               <span className="pulse-dot" aria-hidden="true" />
               Downloading prices and running the screen. A large universe takes about a minute.
             </div>
           )}
-          {result && !result.ok && !running && (
+          {result && !result.ok && !screenRunning && (
             <div className="banner banner-error" role="alert">
               {result.error}
             </div>
           )}
-          {result && result.ok ? <Results result={result} dimmed={Boolean(running)} /> : !running && !result && <Welcome />}
+          {result && result.ok ? <Results result={result} dimmed={screenRunning} /> : !screenRunning && !result && <Welcome />}
         </>
       )}
     </div>

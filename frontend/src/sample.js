@@ -11,6 +11,10 @@ export const SAMPLE_ARGS = {
   indices: ["Nifty 50", "Nifty 100", "Nifty 200", "Nifty LargeMidcap 250", "Nifty Midcap 150", "Nifty Smallcap 100", "Nifty Smallcap 250", "Nifty Microcap 250", "Nifty 500", "Nifty Total Market"],
   defaults: { index: "Nifty Total Market", history: 6, threshold: 100, useEma: true, cr: 75, mr: 5, weekly: false },
   result: null,
+  btDefaults: { index: "Nifty Total Market", start: "2015-01", end: "2026-10", earliest: "2012-01", slots: 10, threshold: 98,
+    useEma: true, cr: 75, mr: 5, cost: 0.2, cashYield: 6, capital: 1000000, ranking: "cr",
+    rankings: { cr: "Closing range", ret6: "6-month return", ret12: "12-month return" } },
+  btResult: null,
 };
 
 export function sampleResult(nonce, settings) {

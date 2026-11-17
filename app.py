@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import io
+import os
+import tempfile
 import base64
 import math
 from collections import Counter
@@ -10,6 +12,9 @@ from pathlib import Path
 import requests
 from openpyxl.styles import PatternFill, Alignment, Font
 import streamlit.components.v1 as components
+
+import bt_data
+import bt_engine
 
 # --- STANDARD INDEX UNIVERSES ---
 # Official NSE Indices constituent files (columns: Company Name, Industry, Symbol, Series, ISIN Code)
@@ -124,8 +129,9 @@ class RSHeatmapScreener:
         self.output_history = output_history
         self.index_ticker = "^NSEI"
         self.use_ema = use_ema
-        self.cr_threshold = cr_threshold / 100.0
-        self.mr_threshold = mr_threshold / 100.0
+        # kept in percent: the filters below compare (value * 100) against these
+        self.cr_threshold = cr_threshold
+        self.mr_threshold = mr_threshold
 
     def fetch_data(self, tickers, interval="1mo", period="3y"):
         all_tickers = tickers + [self.index_ticker]
@@ -357,6 +363,32 @@ def describe_stocks(screener, monthly_data, matrix_df, month_headers):
     return stocks
 
 
+def resolve_universe(req):
+    """Stocks to analyse: the uploaded CSV(s) if any, otherwise the selected index."""
+    index_name = req.get("index") if req.get("index") in INDEX_FILES else DEFAULT_INDEX
+    csv_files = req.get("csvFiles") or []
+    if csv_files:
+        sector_map, all_symbols = read_uploaded_universe([io.StringIO(f.get("text", "")) for f in csv_files])
+        if not all_symbols:
+            return {"error": "The uploaded file has no 'Symbols' (or 'Symbol') column, or it is empty. "
+                             "Fix the file, or remove it to run on the selected index."}
+        return {"sector_map": sector_map, "symbols": all_symbols, "source": "your uploaded list",
+                "name": ", ".join(f.get("name", "CSV") for f in csv_files)}
+    try:
+        const_df, source = load_index_constituents(index_name)
+    except Exception as e:
+        return {"error": f"Could not load the {index_name} stock list from NSE. "
+                         f"Run it again, or upload your own CSV. ({e})"}
+    sector_map, all_symbols = {}, []
+    for _, row in const_df.iterrows():
+        s = row["Symbol"]
+        sec = str(row["Industry"]).strip() if pd.notna(row["Industry"]) and str(row["Industry"]).strip() else "N/A"
+        isin_code = str(row["ISIN Code"]).strip() if pd.notna(row["ISIN Code"]) else ""
+        sector_map[s] = {"Sector": sec, "ISIN": isin_code}
+        all_symbols.append(s)
+    return {"sector_map": sector_map, "symbols": all_symbols, "source": source, "name": index_name}
+
+
 def run_screen(req):
     """Runs the whole screen for one request from the dashboard and returns a JSON-safe result."""
     index_name = req.get("index") if req.get("index") in INDEX_FILES else DEFAULT_INDEX
@@ -366,29 +398,13 @@ def run_screen(req):
     cr_limit = float(req.get("cr", 75))
     mr_limit = float(req.get("mr", 5))
     enable_weekly = bool(req.get("weekly", False))
-    csv_files = req.get("csvFiles") or []
 
     # 1. universe: an uploaded list replaces the index
-    if csv_files:
-        sector_map, all_symbols = read_uploaded_universe([io.StringIO(f.get("text", "")) for f in csv_files])
-        universe_name, universe_source = ", ".join(f.get("name", "CSV") for f in csv_files), "your uploaded list"
-        if not all_symbols:
-            return {"ok": False, "error": "The uploaded file has no 'Symbols' (or 'Symbol') column, or it is empty. "
-                                          "Fix the file, or remove it to run on the selected index."}
-    else:
-        try:
-            const_df, universe_source = load_index_constituents(index_name)
-        except Exception as e:
-            return {"ok": False, "error": f"Could not load the {index_name} stock list from NSE. "
-                                          f"Run it again, or upload your own CSV. ({e})"}
-        sector_map, all_symbols = {}, []
-        for _, row in const_df.iterrows():
-            s = row["Symbol"]
-            sec = str(row["Industry"]).strip() if pd.notna(row["Industry"]) and str(row["Industry"]).strip() else "N/A"
-            isin_code = str(row["ISIN Code"]).strip() if pd.notna(row["ISIN Code"]) else ""
-            sector_map[s] = {"Sector": sec, "ISIN": isin_code}
-            all_symbols.append(s)
-        universe_name = index_name
+    universe = resolve_universe(req)
+    if "error" in universe:
+        return {"ok": False, "error": universe["error"]}
+    sector_map, all_symbols = universe["sector_map"], universe["symbols"]
+    universe_name, universe_source = universe["name"], universe["source"]
 
     symbols = sorted(set(all_symbols))
     unique_tickers = [f"{s}.NS" for s in symbols]
@@ -426,6 +442,120 @@ def run_screen(req):
     return result
 
 
+# --- BACKTEST ---
+BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 98, "useEma": True,
+               "cr": 75, "mr": 5, "cost": 0.2, "cashYield": 6, "capital": 1000000, "ranking": "cr"}
+
+
+@st.cache_resource
+def price_store():
+    """One shared daily-price store for all users of this app (kept on the server's disk)."""
+    return bt_data.PriceStore(os.path.join(tempfile.gettempdir(), "rs_bt_price_store"))
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_rs_index(cutoff_key):
+    return bt_data.rs_index_monthly(pd.Timestamp(bt_data.DATA_START).date(), datetime.now(IST).date())
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_benchmark(cutoff_key):
+    return bt_data.benchmark_monthly(pd.Timestamp(bt_data.DATA_START).date(), datetime.now(IST).date())
+
+
+def run_backtest(req, progress=None):
+    """Runs one backtest request from the dashboard and returns a JSON-safe result."""
+    last_done = bt_data.last_completed_month()
+    earliest = pd.Period(bt_data.EARLIEST_START, "M")
+    try:
+        start = pd.Period(str(req.get("start") or BT_DEFAULTS["start"]), "M")
+        end = pd.Period(str(req.get("end") or last_done), "M")
+    except Exception:
+        return {"ok": False, "error": "Start and end must be months, for example 2015-01."}
+    notes = []
+    if end > last_done:
+        notes.append(f"The end was moved to {last_done.strftime('%b %Y')}, the last completed month.")
+        end = last_done
+    if start < earliest:
+        notes.append(f"The start was moved to {earliest.strftime('%b %Y')}: earlier months lack the 12 months "
+                     f"of history that RS needs.")
+        start = earliest
+    if (end - start).n < 2:
+        return {"ok": False, "error": "Choose an end month at least three months after the start month."}
+
+    p = {
+        "slots": int(min(50, max(1, int(req.get("slots", 10))))),
+        "threshold": min(100.0, max(50.0, float(req.get("threshold", 98)))) / 100.0,
+        "use_ema": bool(req.get("useEma", True)),
+        "cr_min": float(req.get("cr", 75)), "mr_min": float(req.get("mr", 5)),
+        "cost": max(0.0, float(req.get("cost", 0.2))) / 100.0,
+        "cash_yield": float(req.get("cashYield", 6)) / 100.0,
+        "capital": max(1000.0, float(req.get("capital", 1_000_000))),
+        "ranking": req.get("ranking") if req.get("ranking") in bt_engine.RANKINGS else "cr",
+    }
+
+    universe = resolve_universe(req)
+    if "error" in universe:
+        return {"ok": False, "error": universe["error"]}
+    symbols = sorted(set(universe["symbols"]))
+    sectors = {s: universe["sector_map"][s]["Sector"] for s in symbols}
+
+    store = price_store()
+    cutoff = bt_data.last_cutoff()
+    stats = store.update(symbols, cutoff, progress)
+    try:
+        daily = store.panel(symbols)
+    except RuntimeError:
+        return {"ok": False, "error": "Yahoo Finance returned no price data for this universe. "
+                                      "It may be throttling requests; wait a minute and run it again."}
+    daily, spikes = bt_engine.clean_daily(daily)
+    monthly = bt_engine.to_monthly(daily, end)
+    try:
+        rs_index = load_rs_index(cutoff.isoformat())
+    except Exception as e:
+        return {"ok": False, "error": f"Could not download the Nifty 50 index from Yahoo Finance ({e}). Run it again."}
+    try:
+        bench, bench_source = load_benchmark(cutoff.isoformat())
+    except Exception:
+        bench, bench_source = pd.Series(dtype=float), "unavailable"
+
+    if start - 1 not in monthly["Close"].index:
+        return {"ok": False, "error": "There is no price data for the month before the start. Pick a later start."}
+    ind = bt_engine.indicators(monthly, rs_index)
+    sim = bt_engine.simulate(monthly, ind, p, start, end, sectors)
+    report = bt_engine.build_report(sim, bench, p, start, end)
+
+    with_data = list(monthly["Close"].columns)
+    missing = sorted(set(symbols) - set(with_data))
+    settings_rows = [
+        ("Universe", universe["name"]), ("Period", f"{start.strftime('%b %Y')} to {end.strftime('%b %Y')}"),
+        ("Stocks held", p["slots"]), ("Minimum RS threshold %", p["threshold"] * 100),
+        ("Price above 12-month EMA", "Yes" if p["use_ema"] else "No"),
+        ("Min closing range %", p["cr_min"]), ("Min monthly return %", p["mr_min"]),
+        ("Ranking", bt_engine.RANKINGS[p["ranking"]]), ("Cost per buy and per sell %", p["cost"] * 100),
+        ("Cash yield % a year", p["cash_yield"] * 100), ("Starting capital", p["capital"]),
+        ("Benchmark", bench_source),
+    ]
+    return {
+        "ok": True,
+        "asOf": datetime.now(IST).strftime("%d %b %Y, %H:%M IST"),
+        "universe": {"name": universe["name"], "source": universe["source"], "count": len(symbols),
+                     "withData": len(with_data), "missing": missing[:40], "missingCount": len(missing)},
+        "period": {"start": start.strftime("%b %Y"), "end": end.strftime("%b %Y"),
+                   "startKey": str(start), "endKey": str(end), "months": (end - start).n + 1},
+        "settings": {"slots": p["slots"], "threshold": p["threshold"] * 100, "useEma": p["use_ema"],
+                     "cr": p["cr_min"], "mr": p["mr_min"], "cost": p["cost"] * 100,
+                     "cashYield": p["cash_yield"] * 100, "capital": p["capital"],
+                     "ranking": p["ranking"], "rankingLabel": bt_engine.RANKINGS[p["ranking"]]},
+        "benchmarkSource": bench_source,
+        "notes": notes,
+        "data": {"spikesRemoved": spikes, "downloaded": stats["full"] + stats["re-downloaded"],
+                 "refreshed": stats["refreshed"]},
+        "report": report,
+        "excel": base64.b64encode(bt_engine.to_excel(report, settings_rows)).decode("ascii"),
+    }
+
+
 # --- PAGE (the interface is the React app in frontend/, built into frontend/dist) ---
 st.set_page_config(page_title="Abdullah RS Pro", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
@@ -445,10 +575,15 @@ if not (FRONTEND_DIR / "index.html").exists():
 
 rs_dashboard = components.declare_component("rs_dashboard", path=str(FRONTEND_DIR))
 
+progress_slot = st.empty()
+
 request = rs_dashboard(
     indices=list(INDEX_FILES),
     defaults={"index": DEFAULT_INDEX, "history": 6, "threshold": 100, "useEma": True, "cr": 75, "mr": 5, "weekly": False},
     result=st.session_state.get("result"),
+    btDefaults={**BT_DEFAULTS, "end": str(bt_data.last_completed_month()), "earliest": bt_data.EARLIEST_START,
+                "rankings": bt_engine.RANKINGS},
+    btResult=st.session_state.get("bt_result"),
     key="rs_dashboard",
     default=None,
 )
@@ -456,10 +591,18 @@ request = rs_dashboard(
 # A new request carries a new id; results are kept in the session so they survive reruns
 if request and request.get("nonce") and request["nonce"] != st.session_state.get("last_nonce"):
     st.session_state["last_nonce"] = request["nonce"]
+    is_backtest = request.get("kind") == "backtest"
+
+    def show_progress(done, total):
+        progress_slot.progress(min(1.0, done / max(1, total)),
+                               text=f"Downloading daily prices: {done} of {total} stocks")
+
     try:
-        outcome = run_screen(request)
+        outcome = run_backtest(request, show_progress) if is_backtest else run_screen(request)
     except Exception as e:
-        outcome = {"ok": False, "error": f"The screen stopped with an error: {type(e).__name__}: {e}"}
+        what = "backtest" if is_backtest else "screen"
+        outcome = {"ok": False, "error": f"The {what} stopped with an error: {type(e).__name__}: {e}"}
+    progress_slot.empty()
     outcome["nonce"] = request["nonce"]
-    st.session_state["result"] = outcome
+    st.session_state["bt_result" if is_backtest else "result"] = outcome
     st.rerun()
