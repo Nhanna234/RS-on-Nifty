@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { num, downloadBlob, useWidth } from "./util";
+import { num, downloadBlob, useWidth, copyText } from "./util";
 import { LenderControl, LenderNote, useLenderSettings } from "./Lenders.jsx";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -283,10 +283,25 @@ function BtResults({ result, dimmed }) {
       <LenderNote lenders={result.lenders} />
       <Caveats result={result} />
 
+      {result.orders && !result.orders.started && (
+        <section className="panel orders-panel">
+          <Orders o={result.orders} rankingLabel={settings.rankingLabel} />
+        </section>
+      )}
+
       {result.live && (
         <section className="panel live-panel">
           <LiveMonth live={result.live} slots={settings.slots} benchShort={benchShort} rankingLabel={settings.rankingLabel} />
         </section>
+      )}
+
+      {result.orders && result.orders.started && (
+        <details className="panel orders-panel orders-past">
+          <summary>
+            Orders that were due at the first open of {result.orders.executeIn} (decided at the {result.orders.decidedAt} close)
+          </summary>
+          <Orders o={result.orders} rankingLabel={settings.rankingLabel} />
+        </details>
       )}
 
       <section className="panel bt-panel">
@@ -890,6 +905,179 @@ function CandTable({ rows, rankingLabel }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/* ---------- orders for the next open ---------- */
+function Orders({ o, rankingLabel }) {
+  const [mode, setMode] = useState("fresh");
+  const [copied, setCopied] = useState(false);
+  const f = o.fresh;
+  const c = o.continue;
+  const buySyms = (mode === "fresh" ? f.buys : c.buys).map((x) => x.symbol);
+
+  const copy = async () => {
+    const ok = await copyText(buySyms.map((x) => `NSE:${x}`).join(", "));
+    setCopied(ok ? "Copied" : "Copy was blocked by the browser");
+    setTimeout(() => setCopied(false), 2200);
+  };
+  const csv = () => {
+    const lines =
+      mode === "fresh"
+        ? [["Action", "Symbol", "Sector", `Close ${o.decidedAt}`, "Quantity", "Approx amount"].join(",")].concat(
+            f.buys.map((x) => ["BUY", x.symbol, `"${x.sector}"`, x.close, x.qty, x.cost].join(","))
+          )
+        : [["Action", "Symbol", "Sector", `Close ${o.decidedAt}`, "Portfolio weight", "Reason"].join(",")].concat(
+            c.sells.map((x) => ["SELL", x.symbol, `"${x.sector}"`, x.close, x.weight, `"${x.reason}"`].join(",")),
+            c.keeps.map((x) => ["KEEP", x.symbol, `"${x.sector}"`, x.close, x.weight, ""].join(",")),
+            c.buys.map((x) => ["BUY", x.symbol, `"${x.sector}"`, x.close, x.weight, ""].join(","))
+          );
+    downloadBlob(`RS_orders_${o.executeIn.replace(" ", "_")}_${mode}.csv`, new Blob([lines.join("\n") + "\n"], { type: "text/csv" }));
+  };
+
+  return (
+    <div className="orders">
+      <div className="live-head">
+        <div>
+          <h3>
+            {o.started ? `Orders for the first open of ${o.executeIn}` : `Orders for the next open, the first trading day of ${o.executeIn}`}
+          </h3>
+          <p className="chart-hint">
+            Decided at the {o.decidedAt} close, which is complete, so this list is final
+            {o.dataTo ? `. Prices up to ${o.dataTo}` : ""}. {o.qualified} stocks pass the entry rules.
+          </p>
+        </div>
+        <div className="seg seg-lg" role="group" aria-label="Portfolio">
+          <button type="button" className={mode === "fresh" ? "on" : ""} onClick={() => setMode("fresh")}>
+            Start fresh
+          </button>
+          <button type="button" className={mode === "continue" ? "on" : ""} onClick={() => setMode("continue")}>
+            Continue the backtest portfolio
+          </button>
+        </div>
+      </div>
+
+      {o.pricesBehind && (
+        <div className="banner banner-error" role="alert">
+          The latest prices are from {o.dataTo}, but {o.expected}'s closing prices are expected. Yahoo may not have
+          published them yet, so this list may be based on the wrong month-end. Run the backtest again in 20 to 30 minutes.
+          If {o.expected} was a market holiday, ignore this.
+        </div>
+      )}
+
+      {mode === "fresh" ? (
+        <>
+          <p className="orders-note">
+            For a new portfolio of {rupees(f.capital)} (the starting capital above): buy these {f.buys.length} stocks at the
+            open with about {rupees(f.perStock)} each.
+            {f.buys.length < f.slots ? ` Only ${f.buys.length} qualify, so keep ${f.slots - f.buys.length} slots in cash.` : ""}{" "}
+            Quantities use the {o.decidedAt} closing price; you will pay the opening price, so adjust slightly if it differs.
+            {f.buys.some((x) => x.qty === 0)
+              ? " Where one share costs more than the amount per stock, decide in advance whether to buy one share (a bigger weight) or leave that slot in cash; the backtest assumes part-shares."
+              : ""}
+          </p>
+          {f.buys.length ? <OrderTable rows={f.buys} kind="fresh" rankingLabel={rankingLabel} numbered /> : <p className="quiet-note">No stock qualifies: stay in cash this month.</p>}
+          {f.reserve.length > 0 && (
+            <details className="reserve">
+              <summary>Next in line ({f.reserve.length})</summary>
+              <p className="chart-hint">
+                The backtest never uses these: if a stock cannot be bought (for example it opens at its upper circuit), it
+                leaves that slot in cash. Use this list only if you have decided in advance to replace such a stock.
+              </p>
+              <OrderTable rows={f.reserve} kind="reserve" rankingLabel={rankingLabel} />
+            </details>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="orders-note">
+            Only for a portfolio that has followed this backtest from its start month: these are the backtest's own holdings.
+            Weights are shares of the whole portfolio. Sell first, then buy with the cash.
+          </p>
+          <div className="orders-cols">
+            <div>
+              <h4>Sell ({c.sells.length})</h4>
+              {c.sells.length ? <OrderTable rows={c.sells} kind="sell" rankingLabel={rankingLabel} /> : <p className="quiet-note small">Nothing to sell.</p>}
+              <h4>Keep ({c.keeps.length})</h4>
+              {c.keeps.length ? <OrderTable rows={c.keeps} kind="keep" rankingLabel={rankingLabel} /> : <p className="quiet-note small">Nothing held.</p>}
+            </div>
+            <div>
+              <h4>
+                Buy ({c.buys.length} for {c.free} free {c.free === 1 ? "slot" : "slots"})
+              </h4>
+              {c.buys.length ? <OrderTable rows={c.buys} kind="buy" rankingLabel={rankingLabel} /> : <p className="quiet-note small">Nothing to buy.</p>}
+              <p className="chart-hint">About {pct(c.cashAfter, 0)} of the portfolio stays in cash after these trades.</p>
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="toolbar-actions orders-actions">
+        <button type="button" className="ghost-btn" onClick={copy} disabled={!buySyms.length}>
+          {copied || `Copy ${buySyms.length} buy symbols for TradingView`}
+        </button>
+        <button type="button" className="ghost-btn" onClick={csv}>
+          Download these orders (CSV)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function OrderTable({ rows, kind, rankingLabel, numbered }) {
+  const showRank = rankingLabel !== "Closing range";
+  return (
+    <div className="log-scroll orders-table">
+      <table className="log">
+        <thead>
+          <tr>
+            {numbered && <th scope="col" className="num">#</th>}
+            <th scope="col">Stock</th>
+            <th scope="col" className="num">Month-end close</th>
+            {kind === "fresh" && <th scope="col" className="num">Quantity</th>}
+            {kind === "fresh" && <th scope="col" className="num">Approx amount</th>}
+            {(kind === "sell" || kind === "keep" || kind === "buy") && <th scope="col" className="num">Weight</th>}
+            {kind === "sell" ? (
+              <th scope="col">Why</th>
+            ) : (
+              <>
+                <th scope="col" className="num">RS of high</th>
+                <th scope="col" className="num">Closing range</th>
+                <th scope="col" className="num">Month return</th>
+                {showRank && <th scope="col" className="num">{rankingLabel}</th>}
+              </>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((x, i) => (
+            <tr key={x.symbol}>
+              {numbered && <td className="num muted">{i + 1}</td>}
+              <th scope="row">
+                <span className="stock-symbol">{x.symbol}</span>
+                <span className="hold-sector">{x.sector}</span>
+              </th>
+              <td className="num">{num(x.close, 2)}</td>
+              {kind === "fresh" && (
+                <td className="num">{x.qty > 0 ? <strong>{x.qty}</strong> : <span className="src-rule" title="One share costs more than the amount per stock">0: one share costs more</span>}</td>
+              )}
+              {kind === "fresh" && <td className="num">{x.qty > 0 ? rupees(x.cost) : "–"}</td>}
+              {(kind === "sell" || kind === "keep" || kind === "buy") && <td className="num">{pct(x.weight, 1)}</td>}
+              {kind === "sell" ? (
+                <td>{x.reason}</td>
+              ) : (
+                <>
+                  <td className="num">{pct(x.ratio)}</td>
+                  <td className="num">{pct(x.cr, 0)}</td>
+                  <td className={`num${x.ret < 0 ? " neg" : ""}`}>{spct(x.ret)}</td>
+                  {showRank && <td className="num">{spct(x.rank)}</td>}
+                </>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

@@ -36,9 +36,14 @@ SESSION_CUTOFF_IST = (17, 0)        # after 5 pm IST the day's prices count as f
 
 
 # ════════════════════════════════════════════════════════════════════ time
+def now_ist() -> datetime:
+    """The one clock the backtest uses (kept in one place so it can be tested at chosen times)."""
+    return datetime.now(IST)
+
+
 def last_cutoff(now: datetime | None = None) -> datetime:
     """Most recent weekday 5 pm IST that has passed; prices fetched before it are stale."""
-    now = (now or datetime.now(IST)).astimezone(IST)
+    now = (now or now_ist()).astimezone(IST)
     d = now.date()
     if (now.hour, now.minute) < SESSION_CUTOFF_IST:
         d -= timedelta(days=1)
@@ -48,12 +53,23 @@ def last_cutoff(now: datetime | None = None) -> datetime:
 
 
 def last_completed_month(now: datetime | None = None) -> pd.Period:
-    """The previous month; or the current one from 5 pm IST on its last calendar day."""
-    now = (now or datetime.now(IST)).astimezone(IST)
+    """The current month once 5 pm IST has passed on its last weekday (no trading day is left in it);
+    otherwise the previous month. A month that ends on a market holiday completes a day late here,
+    which is safe."""
+    now = (now or now_ist()).astimezone(IST)
     p = pd.Period(now.date(), "M")
-    if now.day == p.days_in_month and (now.hour, now.minute) >= SESSION_CUTOFF_IST:
+    last_weekday = p.end_time.normalize()
+    while last_weekday.weekday() >= 5:
+        last_weekday -= pd.Timedelta(days=1)
+    today = pd.Timestamp(now.date())
+    if today > last_weekday or (today == last_weekday and (now.hour, now.minute) >= SESSION_CUTOFF_IST):
         return p
     return p - 1
+
+
+def last_session_date(now: datetime | None = None):
+    """The most recent weekday whose closing prices should be available (market holidays aside)."""
+    return last_cutoff(now).date()
 
 
 # ═══════════════════════════════════════════════════════════════ prices
@@ -123,8 +139,13 @@ class PriceStore:
         except Exception:  # noqa: BLE001
             pass
 
-    def plan(self, symbols, fresh_after: datetime) -> tuple[list, list]:
+    def plan(self, symbols, fresh_after: datetime, need_date=None) -> tuple[list, list]:
+        """need_date: the latest session whose close should be present. A stock still trading recently
+        but missing that close (Yahoo had not published it at the last fetch) is fetched again,
+        at most every 20 minutes."""
         full, stale = [], []
+        now = now_ist()
+        need = pd.Timestamp(need_date) if need_date is not None else None
         for s in symbols:
             rec = self._get(s)
             if rec is None or rec["df"].empty:
@@ -132,6 +153,10 @@ class PriceStore:
                     full.append(s)
             elif rec["fetched"] < fresh_after:
                 stale.append(s)
+            elif need is not None:
+                last = rec["df"].index.max()
+                if need - pd.Timedelta(days=10) <= last < need and rec["fetched"] < now - timedelta(minutes=20):
+                    stale.append(s)
         return full, stale
 
     def _fetch(self, syms: list[str], start: str, progress=None, done0=0, total=1) -> dict:
@@ -158,11 +183,11 @@ class PriceStore:
                 time.sleep(self.pause)
         return got
 
-    def update(self, symbols, fresh_after: datetime, progress=None) -> dict:
+    def update(self, symbols, fresh_after: datetime, progress=None, need_date=None) -> dict:
         """Bring `symbols` up to date. Returns counts for display."""
         with self.lock:
-            full, stale = self.plan(symbols, fresh_after)
-            now = datetime.now(IST)
+            full, stale = self.plan(symbols, fresh_after, need_date)
+            now = now_ist()
             stats = {"full": len(full), "refreshed": len(stale), "re-downloaded": 0, "failed": []}
             total = len(full) + len(stale)
             if total == 0:
@@ -202,6 +227,12 @@ class PriceStore:
                     else:
                         self._put(s, df, now)
             return stats
+
+    def last_date(self, symbols):
+        """Latest date with a price across `symbols`."""
+        dates = [rec["df"].index.max() for s in symbols
+                 if (rec := self._get(s)) is not None and not rec["df"].empty]
+        return max(dates) if dates else None
 
     def panel(self, symbols) -> dict[str, pd.DataFrame]:
         """{field: DataFrame(date x symbol)} for the symbols that have data."""

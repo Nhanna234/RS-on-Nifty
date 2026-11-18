@@ -566,9 +566,10 @@ def run_backtest(req, progress=None):
 
     store = price_store()
     cutoff = bt_data.last_cutoff()
-    stats = store.update(symbols, cutoff, progress)
+    session = bt_data.last_session_date()
+    stats = store.update(symbols, cutoff, progress, need_date=session)
     # monthly candles up to the running month; the backtest itself uses completed months only
-    cur = pd.Period(datetime.now(IST).date(), "M")
+    cur = pd.Period(bt_data.now_ist().date(), "M")
     try:
         monthly_all, spikes = bt_engine.monthly_in_batches(store.panel, symbols, cur)
     except RuntimeError:
@@ -590,15 +591,27 @@ def run_backtest(req, progress=None):
     sim = bt_engine.simulate(monthly, ind, p, start, end, sectors)
     report = bt_engine.build_report(sim, bench, p, start, end)
 
+    data_to = store.last_date(symbols)
+    data_to_label = data_to.strftime("%d %b %Y") if data_to is not None else None
+
+    # orders for the first open after the latest completed month-end
+    orders = None
+    if end == last_done:
+        orders = bt_engine.next_orders(monthly, ind, p, sim, end, sectors)
+        nxt = end + 1
+        started = nxt in monthly_all["Close"].index and monthly_all["Close"].loc[nxt].notna().any()
+        orders["started"] = bool(started)
+        orders["dataTo"] = data_to_label
+        orders["pricesBehind"] = bool(data_to is not None and data_to.date() < session and not started)
+        orders["expected"] = pd.Timestamp(session).strftime("%d %b %Y")
+
     # the running month: final holdings, provisional returns and next-month changes
     live = None
     if end == last_done and cur == end + 1:
         live = bt_engine.live_view(monthly_all, bt_engine.indicators(monthly_all, rs_index), p, start, end, cur,
                                    sectors, bench)
         if live:
-            last_day = max((store._get(s)["df"].index.max() for s in symbols
-                            if store._get(s) is not None and not store._get(s)["df"].empty), default=None)
-            live["dataTo"] = last_day.strftime("%d %b %Y") if last_day is not None else None
+            live["dataTo"] = data_to_label
 
     with_data = list(monthly["Close"].columns)
     missing = sorted(set(symbols) - set(with_data))
@@ -614,7 +627,7 @@ def run_backtest(req, progress=None):
     ]
     return {
         "ok": True,
-        "asOf": datetime.now(IST).strftime("%d %b %Y, %H:%M IST"),
+        "asOf": bt_data.now_ist().strftime("%d %b %Y, %H:%M IST"),
         "lenders": universe.get("lenders"),
         "universe": {"name": universe["name"], "source": universe["source"], "count": len(symbols),
                      "withData": len(with_data), "missing": missing[:40], "missingCount": len(missing)},
@@ -630,6 +643,7 @@ def run_backtest(req, progress=None):
                  "refreshed": stats["refreshed"]},
         "report": report,
         "live": live,
+        "orders": orders,
         "excel": base64.b64encode(bt_engine.to_excel(report, settings_rows)).decode("ascii"),
     }
 

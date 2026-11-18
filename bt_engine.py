@@ -290,6 +290,67 @@ def live_view(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, cur
     }
 
 
+# ═══════════════════════════════════════════════════════ orders for next open
+def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors: dict) -> dict:
+    """What to do at the first open after the `end` close, which is complete.
+
+    fresh    : a new portfolio starting now; the top `slots` stocks that qualify, 1/slots of the capital each.
+    continue : the backtest's own portfolio; holdings to sell, holdings to keep, and buys for the free slots.
+    """
+    slots = int(p["slots"])
+    elig = eligible(ind, p, need_next_open=False)
+    C = ind["C"]
+
+    def info(s):
+        close = C.at[end, s]
+        return {"symbol": s, "sector": sectors.get(s, "N/A"), "close": _f(close, 2),
+                "ratio": _f(ind["ratio"].at[end, s]), "cr": _f(ind["cr"].at[end, s]), "ret": _f(ind["ret"].at[end, s]),
+                "rank": _f(ind[p.get("ranking", "cr")].at[end, s])}
+
+    ranked_all = rank(ind, p, end, list(elig.columns[elig.loc[end].values]))
+
+    # ---- fresh start
+    alloc = p["capital"] / slots
+    fresh = []
+    for s in ranked_all[:slots]:
+        row = info(s)
+        qty = int(alloc // row["close"]) if row["close"] else 0
+        row.update({"weight": _f(1 / slots), "amount": _f(alloc, 0), "qty": qty, "cost": _f(qty * (row["close"] or 0), 0)})
+        fresh.append(row)
+
+    # ---- continue the backtest's portfolio
+    last = sim["months"][-1]
+    held = {h["symbol"]: h for h in last["held"]}
+    sells, keeps = [], []
+    for s, h in held.items():
+        why = exit_reason(ind, p, end, s)
+        row = {**info(s), "weight": _f(h["weight"])}
+        if why:
+            sells.append({**row, "reason": why})
+        else:
+            keeps.append(row)
+    free = slots - len(keeps)
+    cash_share = last["cash"] + sum(x["weight"] or 0 for x in sells) * (1 - p["cost"])
+    buys = []
+    for s in [x for x in ranked_all if x not in held]:
+        if len(buys) >= free:
+            break
+        w = min(1 / slots, cash_share)
+        if w < MIN_ALLOC_FRAC / slots:
+            break
+        cash_share -= w
+        buys.append({**info(s), "weight": _f(w)})
+
+    return {
+        "decidedAt": end.strftime("%b %Y"), "executeIn": (end + 1).strftime("%b %Y"),
+        "qualified": len(ranked_all),
+        "fresh": {"buys": fresh, "reserve": [info(s) for s in ranked_all[slots:slots + 5]],
+                  "capital": _f(p["capital"], 0), "perStock": _f(alloc, 0), "slots": slots},
+        "continue": {"sells": sells, "keeps": sorted(keeps, key=lambda r: -(r["weight"] or 0)), "buys": buys,
+                     "free": free, "cashAfter": _f(max(0.0, cash_share))},
+    }
+
+
 # ═══════════════════════════════════════════════════════════════ metrics
 def max_drawdown(values: pd.Series) -> tuple[float, pd.Series]:
     dd = values / values.cummax() - 1

@@ -29,6 +29,8 @@ Decided at each month-end close and traded at the next month's first open:
 
 **The running month.** When the end month is the last completed month, the backtest also shows the current month. Its holdings are final, chosen at the previous month-end close and bought at this month's first open. Their returns run to the latest close. It also shows what the rules would sell and buy at the next open if the month closed at the latest prices; that part is provisional until the month ends.
 
+**Orders for the next open.** Once a month has closed (from 5 pm IST on its last weekday), the backtest shows the orders for the next month's first open, decided at that close. "Start fresh" lists the stocks a new portfolio should buy, with quantities for the starting capital; "Continue the backtest portfolio" lists the backtest's own sells, keeps and buys. If the month-end close has not reached Yahoo yet, the panel warns, and the next run fetches it again.
+
 The first backtest on a universe downloads daily prices from 2010 for every stock and takes a few minutes; later runs reuse the stored prices.
 
 Streamlit Cloud only runs `app.py`. It does not build the dashboard, so `frontend/dist` is committed to the repository.
