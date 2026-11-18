@@ -17,10 +17,11 @@ import importlib
 
 import bt_data
 import bt_engine
+import lender_filter
 
 # After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
 # modules in memory. Reload any whose file has changed since it was loaded.
-for _mod in (bt_data, bt_engine):
+for _mod in (bt_data, bt_engine, lender_filter):
     _mtime = os.path.getmtime(_mod.__file__)
     if getattr(_mod, "_loaded_mtime", None) != _mtime:
         importlib.reload(_mod)
@@ -80,7 +81,7 @@ def _download_index_csv(fname):
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def load_index_constituents(index_name):
-    """Returns (table with Symbol / Industry / ISIN Code, note on where it came from)."""
+    """Returns (table with Symbol / Company Name / Industry / ISIN Code, note on where it came from)."""
     try:
         df = _download_index_csv(INDEX_FILES[index_name])
         note = "official NSE Indices list"
@@ -99,12 +100,60 @@ def load_index_constituents(index_name):
             raise RuntimeError(f"Could not download the {index_name} list.\n{first_error}")
     if "Series" in df.columns:
         df = df[df["Series"].astype(str).str.strip().isin(["EQ", "BE", "BZ"])]
-    for c in ("Industry", "ISIN Code"):
+    for c in ("Company Name", "Industry", "ISIN Code"):
         if c not in df.columns:
             df[c] = ""
     df = df.copy()
     df["Symbol"] = df["Symbol"].map(clean_symbol)
-    return df.drop_duplicates("Symbol")[["Symbol", "Industry", "ISIN Code"]].reset_index(drop=True), note
+    return df.drop_duplicates("Symbol")[["Symbol", "Company Name", "Industry", "ISIN Code"]].reset_index(drop=True), note
+
+
+# --- LENDING COMPANIES FILTER (rules in lender_filter.py) ---
+@st.cache_resource
+def basic_industry_cache():
+    return lender_filter.BasicIndustryCache(os.path.join(tempfile.gettempdir(), "rs_basic_industry.json"))
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def load_nbfc_index():
+    """NSE's Nifty NBFC index: all NBFC stocks in the Nifty Total Market. Empty if it cannot be downloaded."""
+    try:
+        return set(_download_index_csv("ind_niftyNBFC_list.csv")["Symbol"].map(clean_symbol))
+    except Exception:
+        return set()
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def total_market_names():
+    """Company name and broad sector for every Nifty Total Market stock (used for uploaded lists)."""
+    try:
+        df, _ = load_index_constituents("Nifty Total Market")
+        return dict(zip(df["Symbol"], df["Company Name"])), dict(zip(df["Symbol"], df["Industry"]))
+    except Exception:
+        return {}, {}
+
+
+def apply_lender_filter(universe, req):
+    """Removes lending companies from the universe unless the request switches the filter off."""
+    if not req.get("excludeLenders", True):
+        universe["lenders"] = {"on": False}
+        return universe
+    tm_names, tm_sectors = total_market_names()
+    symbols = sorted(set(universe["symbols"]))
+    names = {s: universe["names"].get(s) or tm_names.get(s, "") for s in symbols}
+    sectors = {}
+    for s in symbols:
+        own = universe["sector_map"].get(s, {}).get("Sector", "")
+        sectors[s] = own if own and own != "N/A" else tm_sectors.get(s, "")
+        if not lender_filter.is_financial_sector(sectors[s]) and lender_filter.is_financial_sector(tm_sectors.get(s)):
+            sectors[s] = tm_sectors[s]
+    result = lender_filter.classify(symbols, names, sectors, basic_industry_cache(), load_nbfc_index(),
+                                    req.get("alwaysExclude"), req.get("neverExclude"))
+    drop = {r["symbol"] for r in result["excluded"]}
+    universe["symbols"] = [s for s in universe["symbols"] if s not in drop]
+    universe["sector_map"] = {s: v for s, v in universe["sector_map"].items() if s not in drop}
+    universe["lenders"] = {"on": True, **result}
+    return universe
 
 
 def read_uploaded_universe(files):
@@ -382,8 +431,9 @@ def resolve_universe(req):
         if not all_symbols:
             return {"error": "The uploaded file has no 'Symbols' (or 'Symbol') column, or it is empty. "
                              "Fix the file, or remove it to run on the selected index."}
-        return {"sector_map": sector_map, "symbols": all_symbols, "source": "your uploaded list",
-                "name": ", ".join(f.get("name", "CSV") for f in csv_files)}
+        return apply_lender_filter({"sector_map": sector_map, "symbols": all_symbols, "names": {},
+                                    "source": "your uploaded list",
+                                    "name": ", ".join(f.get("name", "CSV") for f in csv_files)}, req)
     try:
         const_df, source = load_index_constituents(index_name)
     except Exception as e:
@@ -396,7 +446,9 @@ def resolve_universe(req):
         isin_code = str(row["ISIN Code"]).strip() if pd.notna(row["ISIN Code"]) else ""
         sector_map[s] = {"Sector": sec, "ISIN": isin_code}
         all_symbols.append(s)
-    return {"sector_map": sector_map, "symbols": all_symbols, "source": source, "name": index_name}
+    names = dict(zip(const_df["Symbol"], const_df["Company Name"].astype(str)))
+    return apply_lender_filter({"sector_map": sector_map, "symbols": all_symbols, "names": names,
+                                "source": source, "name": index_name}, req)
 
 
 def run_screen(req):
@@ -434,6 +486,7 @@ def run_screen(req):
     result = {
         "ok": True,
         "universe": {"name": universe_name, "source": universe_source, "count": len(symbols)},
+        "lenders": universe.get("lenders"),
         "asOf": now.strftime("%d %b %Y, %H:%M IST"),
         "months": month_headers,
         "monthInProgress": (last_month.year, last_month.month) == (now.year, now.month),
@@ -454,7 +507,8 @@ def run_screen(req):
 
 # --- BACKTEST ---
 BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 98, "useEma": True,
-               "cr": 75, "mr": 5, "cost": 0.2, "cashYield": 6, "capital": 1000000, "ranking": "cr"}
+               "cr": 75, "mr": 5, "cost": 0.2, "cashYield": 6, "capital": 1000000, "ranking": "cr",
+               "excludeLenders": True}
 
 
 @st.cache_resource
@@ -555,11 +609,13 @@ def run_backtest(req, progress=None):
         ("Min closing range %", p["cr_min"]), ("Min monthly return %", p["mr_min"]),
         ("Ranking", bt_engine.RANKINGS[p["ranking"]]), ("Cost per buy and per sell %", p["cost"] * 100),
         ("Cash yield % a year", p["cash_yield"] * 100), ("Starting capital", p["capital"]),
+        ("Lending companies", "Excluded" if (universe.get("lenders") or {}).get("on") else "Included"),
         ("Benchmark", bench_source),
     ]
     return {
         "ok": True,
         "asOf": datetime.now(IST).strftime("%d %b %Y, %H:%M IST"),
+        "lenders": universe.get("lenders"),
         "universe": {"name": universe["name"], "source": universe["source"], "count": len(symbols),
                      "withData": len(with_data), "missing": missing[:40], "missingCount": len(missing)},
         "period": {"start": start.strftime("%b %Y"), "end": end.strftime("%b %Y"),
@@ -601,7 +657,8 @@ progress_slot = st.empty()
 
 request = rs_dashboard(
     indices=list(INDEX_FILES),
-    defaults={"index": DEFAULT_INDEX, "history": 6, "threshold": 100, "useEma": True, "cr": 75, "mr": 5, "weekly": False},
+    defaults={"index": DEFAULT_INDEX, "history": 6, "threshold": 100, "useEma": True, "cr": 75, "mr": 5, "weekly": False,
+              "excludeLenders": True},
     result=st.session_state.get("result"),
     btDefaults={**BT_DEFAULTS, "end": str(bt_data.last_completed_month()), "earliest": bt_data.EARLIEST_START,
                 "rankings": bt_engine.RANKINGS},

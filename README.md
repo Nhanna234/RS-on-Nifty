@@ -8,6 +8,14 @@ Screens NSE stocks for relative strength (stock price divided by the Nifty 50) a
 - `bt_engine.py` holds the backtest rules and statistics; `bt_data.py` downloads and stores daily prices and the Nifty 50 series used by the backtest. Neither imports Streamlit, so both can be tested on their own.
 - `frontend/` is the dashboard, written in React and built with Vite. Streamlit shows the built files in `frontend/dist`.
 
+## Leaving out lending companies
+
+Both tabs have an "Exclude lending companies" switch, on by default. A company counts as a lender when NSE Indices' basic industry (the most detailed level of NSE's industry classification) is Public Sector Bank, Private Sector Bank, Other Bank, Non Banking Financial Company (NBFC), Housing Finance Company or Financial Institution. Insurers, fund houses, brokers, exchanges, depositories, fintech and holding companies stay in. The rules are in `lender_filter.py`.
+
+The basic industry is read from NSE's quote data for Financial Services stocks only and kept for 30 days. If NSE does not answer, name rules and NSE's Nifty NBFC index list are used instead, and the results say so. Each run lists every company left out and every financial company kept, with the reason. "Always exclude" and "Never exclude" lists override the classification and are remembered in the browser.
+
+The backtest applies today's classification to every past month.
+
 ## Backtest rules
 
 Decided at each month-end close and traded at the next month's first open:

@@ -3,6 +3,7 @@ import { connect, embedded, sendValue, setFrameHeight } from "./streamlit";
 import { SAMPLE_ARGS, sampleResult } from "./sample";
 import { num, signedPct, plural, downloadBlob, copyText, useWidth } from "./util";
 import Backtest from "./Backtest.jsx";
+import { LenderControl, LenderNote, useLenderSettings } from "./Lenders.jsx";
 
 /* ---------- app shell ---------- */
 export default function App() {
@@ -101,6 +102,7 @@ export default function App() {
 function Controls({ indices, defaults, running, onRun }) {
   const [s, setS] = useState(defaults);
   const [files, setFiles] = useState([]);
+  const [lend, setLend] = useLenderSettings(defaults.excludeLenders !== false);
   const fileInput = useRef(null);
   const set = (key) => (e) =>
     setS((prev) => ({ ...prev, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
@@ -126,6 +128,7 @@ function Controls({ indices, defaults, running, onRun }) {
         cr: clamp(s.cr, 0, 100, 75),
         mr: clamp(s.mr, 0, 100, 5),
         weekly: Boolean(s.weekly),
+        ...lend,
       },
       files
     );
@@ -194,6 +197,9 @@ function Controls({ indices, defaults, running, onRun }) {
           <span className="switch-track" aria-hidden="true" />
           Strong latest week only
         </label>
+      </div>
+      <div className="field field-lenders">
+        <LenderControl value={lend} onChange={setLend} idPrefix="s" />
       </div>
 
       <button className="run-btn" type="submit" disabled={running}>
@@ -367,6 +373,7 @@ function Results({ result, dimmed }) {
       <p className="provenance">
         {universe.name} ({universe.source}), {universe.count} stocks. Run at {result.asOf}.
       </p>
+      <LenderNote lenders={result.lenders} />
 
       <div className="board">
         <SectorPanel sectors={sectors} active={sector} onPick={setSector} total={stocks.length} />

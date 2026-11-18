@@ -404,3 +404,18 @@ button, input, select { font: inherit; color: inherit; }
 .quiet-note.small { padding: 4px 0; font-size: 13px; }
 .cand-table { font-size: 13px; }
 @media (max-width: 1000px) { .live-grid { grid-template-columns: 1fr; } }
+
+/* ===== lending filter ===== */
+.field-lenders { grid-column: 1 / -1; padding-top: 2px; }
+.lender-control { display: flex; flex-direction: column; gap: 8px; }
+.lender-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+.lender-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 320px)); gap: 6px 16px; align-items: end; }
+.lender-lists .hint { grid-column: 1 / -1; }
+.lender-lists input[type="text"] { height: 38px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 0 10px; width: 100%; }
+.bt-controls .field-switches { flex-direction: column; align-items: flex-start; gap: 10px; }
+.lender-note { margin-top: 6px; }
+.lender-def { margin: 8px 0 4px; max-width: 100ch; }
+.lender-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.lender-scroll { max-height: 340px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; padding: 0 8px; background: var(--surface); }
+.src-rule { color: #8a5a00; }
+@media (max-width: 900px) { .lender-cols, .lender-lists { grid-template-columns: 1fr; } }

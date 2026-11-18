@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { num, downloadBlob, useWidth } from "./util";
+import { LenderControl, LenderNote, useLenderSettings } from "./Lenders.jsx";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -54,6 +55,7 @@ export default function Backtest({ indices, defaults, result, running, busy, onR
 function BtControls({ indices, defaults, running, busy, onRun }) {
   const [s, setS] = useState(defaults);
   const [files, setFiles] = useState([]);
+  const [lend, setLend] = useLenderSettings(defaults.excludeLenders !== false);
   const fileInput = useRef(null);
   const set = (key) => (e) =>
     setS((prev) => ({ ...prev, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
@@ -84,6 +86,7 @@ function BtControls({ indices, defaults, running, busy, onRun }) {
         cost: n(s.cost, 0, 5, 0.2),
         cashYield: n(s.cashYield, 0, 20, 6),
         capital: n(s.capital, 1000, 1e12, 1e6),
+        ...lend,
       },
       files
     );
@@ -174,6 +177,7 @@ function BtControls({ indices, defaults, running, busy, onRun }) {
           <span className="switch-track" aria-hidden="true" />
           Price above 12-month EMA (entry and exit)
         </label>
+        <LenderControl value={lend} onChange={setLend} idPrefix="b" />
       </div>
       <button className="run-btn" type="submit" disabled={busy}>
         {running ? "Running…" : "Run backtest"}
@@ -276,6 +280,7 @@ function BtResults({ result, dimmed }) {
         {num(settings.threshold, 1)}%, ranked by {settings.rankingLabel.toLowerCase()}, {num(settings.cost, 2)}% cost per buy and
         per sell. Benchmark: {result.benchmarkSource}. Run at {result.asOf}.
       </p>
+      <LenderNote lenders={result.lenders} />
       <Caveats result={result} />
 
       {result.live && (
