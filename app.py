@@ -13,8 +13,18 @@ import requests
 from openpyxl.styles import PatternFill, Alignment, Font
 import streamlit.components.v1 as components
 
+import importlib
+
 import bt_data
 import bt_engine
+
+# After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
+# modules in memory. Reload any whose file has changed since it was loaded.
+for _mod in (bt_data, bt_engine):
+    _mtime = os.path.getmtime(_mod.__file__)
+    if getattr(_mod, "_loaded_mtime", None) != _mtime:
+        importlib.reload(_mod)
+        _mod._loaded_mtime = _mtime
 
 # --- STANDARD INDEX UNIVERSES ---
 # Official NSE Indices constituent files (columns: Company Name, Industry, Symbol, Series, ISIN Code)
