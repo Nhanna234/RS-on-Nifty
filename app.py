@@ -504,12 +504,10 @@ def run_backtest(req, progress=None):
     cutoff = bt_data.last_cutoff()
     stats = store.update(symbols, cutoff, progress)
     try:
-        daily = store.panel(symbols)
+        monthly, spikes = bt_engine.monthly_in_batches(store.panel, symbols, end)
     except RuntimeError:
         return {"ok": False, "error": "Yahoo Finance returned no price data for this universe. "
                                       "It may be throttling requests; wait a minute and run it again."}
-    daily, spikes = bt_engine.clean_daily(daily)
-    monthly = bt_engine.to_monthly(daily, end)
     try:
         rs_index = load_rs_index(cutoff.isoformat())
     except Exception as e:

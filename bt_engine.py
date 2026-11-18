@@ -63,6 +63,28 @@ def to_monthly(daily: dict, last_month: pd.Period) -> dict:
     return m
 
 
+def monthly_in_batches(get_panel, symbols: list[str], last_month: pd.Period, batch: int = 50) -> tuple[dict, int]:
+    """Clean daily prices and turn them into monthly candles a batch of stocks at a time, so the
+    daily prices of the whole universe are never in memory together."""
+    parts = {f: [] for f in ("Open", "High", "Low", "Close")}
+    spikes = 0
+    for i in range(0, len(symbols), batch):
+        try:
+            daily = get_panel(symbols[i:i + batch])
+        except RuntimeError:                         # no stock in this batch has data
+            continue
+        daily, n = clean_daily(daily)
+        spikes += n
+        m = to_monthly(daily, last_month)
+        for f in parts:
+            parts[f].append(m[f])
+        del daily, m
+    if not parts["Close"]:
+        raise RuntimeError("No price data is available for this universe.")
+    out = {f: pd.concat(parts[f], axis=1).sort_index() for f in parts}
+    return out, spikes
+
+
 # ═══════════════════════════════════════════════════════════════ signals
 def indicators(m: dict, rs_index: pd.Series) -> dict:
     C, H, L = m["Close"], m["High"], m["Low"]
