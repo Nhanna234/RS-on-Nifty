@@ -109,9 +109,14 @@ def load_index_constituents(index_name):
 
 
 # --- LENDING COMPANIES FILTER (rules in lender_filter.py) ---
-@st.cache_resource
-def basic_industry_cache():
+@st.cache_resource(max_entries=1)
+def _basic_industry_cache(code_version):
     return lender_filter.BasicIndustryCache(os.path.join(tempfile.gettempdir(), "rs_basic_industry.json"))
+
+
+def basic_industry_cache():
+    """Rebuilt when lender_filter.py changes; the saved classifications on disk are reused."""
+    return _basic_industry_cache(os.path.getmtime(lender_filter.__file__))
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -511,10 +516,15 @@ BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "thresho
                "excludeLenders": True}
 
 
-@st.cache_resource
-def price_store():
-    """One shared daily-price store for all users of this app (kept on the server's disk)."""
+@st.cache_resource(max_entries=1)
+def _price_store(code_version):
     return bt_data.PriceStore(os.path.join(tempfile.gettempdir(), "rs_bt_price_store"))
+
+
+def price_store():
+    """One shared daily-price store for all users of this app (kept on the server's disk). It is rebuilt
+    when bt_data.py changes, so it never runs old code after an update; the prices on disk are reused."""
+    return _price_store(os.path.getmtime(bt_data.__file__))
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
