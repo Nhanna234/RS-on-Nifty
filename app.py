@@ -503,8 +503,10 @@ def run_backtest(req, progress=None):
     store = price_store()
     cutoff = bt_data.last_cutoff()
     stats = store.update(symbols, cutoff, progress)
+    # monthly candles up to the running month; the backtest itself uses completed months only
+    cur = pd.Period(datetime.now(IST).date(), "M")
     try:
-        monthly, spikes = bt_engine.monthly_in_batches(store.panel, symbols, end)
+        monthly_all, spikes = bt_engine.monthly_in_batches(store.panel, symbols, cur)
     except RuntimeError:
         return {"ok": False, "error": "Yahoo Finance returned no price data for this universe. "
                                       "It may be throttling requests; wait a minute and run it again."}
@@ -517,11 +519,22 @@ def run_backtest(req, progress=None):
     except Exception:
         bench, bench_source = pd.Series(dtype=float), "unavailable"
 
+    monthly = {f: df[df.index <= end] for f, df in monthly_all.items()}
     if start - 1 not in monthly["Close"].index:
         return {"ok": False, "error": "There is no price data for the month before the start. Pick a later start."}
     ind = bt_engine.indicators(monthly, rs_index)
     sim = bt_engine.simulate(monthly, ind, p, start, end, sectors)
     report = bt_engine.build_report(sim, bench, p, start, end)
+
+    # the running month: final holdings, provisional returns and next-month changes
+    live = None
+    if end == last_done and cur == end + 1:
+        live = bt_engine.live_view(monthly_all, bt_engine.indicators(monthly_all, rs_index), p, start, end, cur,
+                                   sectors, bench)
+        if live:
+            last_day = max((store._get(s)["df"].index.max() for s in symbols
+                            if store._get(s) is not None and not store._get(s)["df"].empty), default=None)
+            live["dataTo"] = last_day.strftime("%d %b %Y") if last_day is not None else None
 
     with_data = list(monthly["Close"].columns)
     missing = sorted(set(symbols) - set(with_data))
@@ -550,6 +563,7 @@ def run_backtest(req, progress=None):
         "data": {"spikesRemoved": spikes, "downloaded": stats["full"] + stats["re-downloaded"],
                  "refreshed": stats["refreshed"]},
         "report": report,
+        "live": live,
         "excel": base64.b64encode(bt_engine.to_excel(report, settings_rows)).decode("ascii"),
     }
 

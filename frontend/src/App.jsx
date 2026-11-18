@@ -16,7 +16,7 @@ export default function App() {
   // keep the Streamlit iframe exactly as tall as the page
   useEffect(() => {
     if (!embedded || !rootRef.current) return undefined;
-    const report = () => setFrameHeight(Math.ceil(rootRef.current.getBoundingClientRect().height) + 4);
+    const report = () => rootRef.current && setFrameHeight(Math.ceil(rootRef.current.getBoundingClientRect().height) + 4);
     const ro = new ResizeObserver(report);
     ro.observe(rootRef.current);
     report();

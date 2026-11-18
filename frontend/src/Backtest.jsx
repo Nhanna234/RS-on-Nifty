@@ -216,8 +216,9 @@ function BtIntro({ defaults }) {
 function BtResults({ result, dimmed }) {
   const { report: r, period, universe, settings } = result;
   const curve = r.curve;
-  const [sel, setSel] = useState(curve.length - 1);
+  const [selRaw, setSel] = useState(curve.length - 1);
   useEffect(() => setSel(curve.length - 1), [result.nonce, curve.length]);
+  const sel = Math.min(Math.max(0, selRaw), curve.length - 1); // a new, shorter result can arrive before the reset
 
   const s = r.strategy;
   const b = r.benchmark;
@@ -276,6 +277,12 @@ function BtResults({ result, dimmed }) {
         per sell. Benchmark: {result.benchmarkSource}. Run at {result.asOf}.
       </p>
       <Caveats result={result} />
+
+      {result.live && (
+        <section className="panel live-panel">
+          <LiveMonth live={result.live} slots={settings.slots} benchShort={benchShort} rankingLabel={settings.rankingLabel} />
+        </section>
+      )}
 
       <section className="panel bt-panel">
         <EquityChart curve={curve} sel={sel} onSel={setSel} benchShort={benchShort} />
@@ -675,8 +682,8 @@ function MonthHoldings({ months, curve, sel, onSel, slots }) {
         </div>
       </div>
       <p className="chart-hint">
-        {mo.held.length} of {slots} slots filled, {pct(mo.cash, 0)} in cash. {mo.candidates} stocks qualified at the previous
-        month-end{mo.entered.length ? `; ${mo.entered.length} bought` : "; none bought"}.
+        Chosen at the {curve[i - 1].m} close and traded at the first open of {mo.m}. {mo.held.length} of {slots} slots filled,{" "}
+        {pct(mo.cash, 0)} in cash. {mo.candidates} stocks qualified{mo.entered.length ? `; ${mo.entered.length} bought` : "; none bought"}.
       </p>
       {mo.held.length ? (
         <table className="hold-table">
@@ -727,6 +734,157 @@ function MonthHoldings({ months, curve, sel, onSel, slots }) {
         <p className="chart-hint">Not bought for lack of cash: {mo.skipped.join(", ")}.</p>
       )}
     </div>
+  );
+}
+
+/* ---------- the running month ---------- */
+function LiveMonth({ live, slots, benchShort, rankingLabel }) {
+  const n = live.next;
+  const ahead = live.benchMtd != null && live.mtd != null ? live.mtd - live.benchMtd : null;
+  return (
+    <div className="live">
+      <div className="live-head">
+        <div>
+          <h3>{live.month} so far</h3>
+          <p className="chart-hint">
+            These {live.held.length} stocks were chosen at the {live.decidedAt} close and bought at the first open of {live.month}.
+            The list is final; the returns run to the latest close{live.dataTo ? ` (${live.dataTo})` : ""} and will change until the month ends.
+          </p>
+        </div>
+        <dl className="live-figs">
+          <div>
+            <dt>Portfolio this month</dt>
+            <dd className={live.mtd < 0 ? "neg" : ""}>{spct(live.mtd)}</dd>
+          </div>
+          {live.benchMtd != null && (
+            <div>
+              <dt>{benchShort} this month</dt>
+              <dd className={live.benchMtd < 0 ? "neg" : ""}>{spct(live.benchMtd)}</dd>
+            </div>
+          )}
+          {ahead != null && (
+            <div>
+              <dt>Difference</dt>
+              <dd>{`${ahead >= 0 ? "+" : ""}${num(ahead * 100)} points`}</dd>
+            </div>
+          )}
+        </dl>
+      </div>
+
+      <div className="live-grid">
+        <div>
+          <h4>
+            Held in {live.month}: {live.held.length} of {slots} slots, {pct(live.cash, 0)} in cash
+          </h4>
+          {live.held.length ? (
+            <table className="hold-table">
+              <thead>
+                <tr>
+                  <th scope="col">Stock</th>
+                  <th scope="col">Bought</th>
+                  <th scope="col" className="num">This month</th>
+                  <th scope="col" className="num">Since bought</th>
+                  <th scope="col" className="num">Weight</th>
+                </tr>
+              </thead>
+              <tbody>
+                {live.held.map((h) => (
+                  <tr key={h.symbol}>
+                    <th scope="row">
+                      <span className="stock-symbol">{h.symbol}</span>
+                      {h.new && <span className="tag-new">New</span>}
+                      <span className="hold-sector">{h.sector}</span>
+                    </th>
+                    <td>
+                      {h.bought} <span className="muted">at {num(h.entryPx, 2)}</span>
+                    </td>
+                    <td className={`num${h.mtd < 0 ? " neg" : ""}`}>{spct(h.mtd)}</td>
+                    <td className={`num${h.since < 0 ? " neg" : ""}`}>{spct(h.since)}</td>
+                    <td className="num">{pct(h.w, 1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="quiet-note">All in cash: no stock passed the entry rules at the {live.decidedAt} close.</p>
+          )}
+          {live.sold.length > 0 && (
+            <p className="chart-hint">
+              Sold at the first open of {live.month}: {live.sold.map((x) => `${x.symbol} (${x.reason})`).join(", ")}.
+            </p>
+          )}
+          {live.skipped.length > 0 && <p className="chart-hint">Not bought for lack of cash: {live.skipped.join(", ")}.</p>}
+        </div>
+
+        <div className="provisional">
+          <h4>
+            If {live.month} closed at the latest prices <span className="live-tag inline">Provisional</span>
+          </h4>
+          <p className="chart-hint">
+            What the rules would do at the next month's first open. This changes every day until the month-end close; act
+            only on the list after the month has closed.
+          </p>
+          <h5>Would sell</h5>
+          {n.exits.length ? (
+            <ul className="plain">
+              {n.exits.map((x) => (
+                <li key={x.symbol}>
+                  <span className="stock-symbol">{x.symbol}</span>: {x.reason}
+                  {x.ratio != null ? `, RS at ${pct(x.ratio)} of its high` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="quiet-note small">Nothing; every holding still passes.</p>
+          )}
+          <h5>
+            Would buy ({n.buys.length} of {n.free} free {n.free === 1 ? "slot" : "slots"}; {n.qualified} stocks qualify)
+          </h5>
+          {n.buys.length ? (
+            <CandTable rows={n.buys} rankingLabel={rankingLabel} />
+          ) : (
+            <p className="quiet-note small">{n.free ? "No stock qualifies at the latest prices." : "No free slots."}</p>
+          )}
+          {n.reserve.length > 0 && (
+            <>
+              <h5>Next in line</h5>
+              <CandTable rows={n.reserve} rankingLabel={rankingLabel} />
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CandTable({ rows, rankingLabel }) {
+  const cr = rankingLabel === "Closing range";
+  return (
+    <table className="hold-table cand-table">
+      <thead>
+        <tr>
+          <th scope="col">Stock</th>
+          <th scope="col" className="num">RS of high</th>
+          <th scope="col" className="num">Closing range</th>
+          <th scope="col" className="num">Month so far</th>
+          {!cr && <th scope="col" className="num">{rankingLabel}</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((x) => (
+          <tr key={x.symbol}>
+            <th scope="row">
+              <span className="stock-symbol">{x.symbol}</span>
+              <span className="hold-sector">{x.sector}</span>
+            </th>
+            <td className="num">{pct(x.ratio)}</td>
+            <td className="num">{pct(x.cr, 0)}</td>
+            <td className="num">{spct(x.ret)}</td>
+            {!cr && <td className="num">{spct(x.rank)}</td>}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

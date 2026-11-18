@@ -106,12 +106,14 @@ def indicators(m: dict, rs_index: pd.Series) -> dict:
     }
 
 
-def eligible(ind: dict, p: dict) -> pd.DataFrame:
-    """True where a stock may be bought at that month-end."""
+def eligible(ind: dict, p: dict, need_next_open: bool = True) -> pd.DataFrame:
+    """True where a stock may be bought at that month-end. need_next_open=False is for the running
+    month, whose next open has not happened yet."""
     ratio, thr = ind["ratio"], p["threshold"]
     rs_ok = (ratio >= AT_HIGH) | ((ratio >= thr) & (ratio > ind["ratio2"]))
     ok = rs_ok & (ind["cr"] * 100 >= p["cr_min"]) & (ind["ret"] * 100 >= p["mr_min"])
-    ok &= ind["exec_px"].notna() & (ind["exec_px"] > 0)
+    if need_next_open:
+        ok &= ind["exec_px"].notna() & (ind["exec_px"] > 0)
     if p["use_ema"]:
         ok &= ind["C"] >= ind["ema"]
     return ok.fillna(False)
@@ -233,6 +235,59 @@ def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sect
             "reason": "Still held", "open": True,
         })
     return {"equity": equity, "months": months, "trades": trades}
+
+
+# ═══════════════════════════════════════════════════════════ running month
+def live_view(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, cur: pd.Period,
+              sectors: dict, bench: pd.Series) -> dict | None:
+    """The month after `end`, which is still running.
+
+    Holdings: final. They were decided at the close of `end` and bought at the first open of `cur`.
+    Returns: provisional, from that open (or the `end` close for stocks carried over) to the latest close.
+    Next month's changes: provisional, the exits and buys the rules would make if `cur` closed at the
+    latest prices. m and ind must contain `cur` as a partial month.
+    """
+    if cur not in m["Close"].index or m["Close"].loc[cur].notna().sum() == 0:
+        return None
+    sim = simulate(m, ind, p, start, cur, sectors)
+    mo = sim["months"][-1]
+    v_prev, v_now = sim["equity"][-2]["value"], sim["equity"][-1]["value"]
+    open_trades = {t["symbol"]: t for t in sim["trades"] if t["open"]}
+
+    held = []
+    for h in mo["held"]:
+        t = open_trades.get(h["symbol"], {})
+        held.append({"symbol": h["symbol"], "sector": h["sector"], "w": _f(h["weight"]), "mtd": _f(h["ret"]),
+                     "since": _f(t.get("ret")), "bought": label(t["entry"]) if t else None,
+                     "entryPx": _f(t.get("entryPx"), 2), "lastPx": _f(t.get("exitPx"), 2), "new": h["new"]})
+
+    # what the rules would do at the next open if this month closed at the latest prices
+    keep_syms = [h["symbol"] for h in mo["held"]]
+    exits = []
+    for s in keep_syms:
+        why = exit_reason(ind, p, cur, s)
+        if why:
+            exits.append({"symbol": s, "reason": why, "ratio": _f(ind["ratio"].at[cur, s])})
+    free = int(p["slots"]) - (len(keep_syms) - len(exits))
+    elig = eligible(ind, p, need_next_open=False)
+    cands = [s for s in elig.columns[elig.loc[cur].values] if s not in keep_syms]
+    ranked = rank(ind, p, cur, cands)
+
+    def info(s):
+        return {"symbol": s, "sector": sectors.get(s, "N/A"), "ratio": _f(ind["ratio"].at[cur, s]),
+                "cr": _f(ind["cr"].at[cur, s]), "ret": _f(ind["ret"].at[cur, s]),
+                "rank": _f(ind[p.get("ranking", "cr")].at[cur, s])}
+
+    b_now, b_prev = bench.get(cur), bench.get(end)
+    return {
+        "month": cur.strftime("%b %Y"), "monthKey": label(cur), "decidedAt": end.strftime("%b %Y"),
+        "held": held, "sold": mo["exited"], "skipped": mo["skipped"], "cash": _f(mo["cash"]),
+        "mtd": _f(v_now / v_prev - 1), "valueNow": _f(v_now, 0),
+        "benchMtd": _f(b_now / b_prev - 1) if b_now is not None and b_prev is not None and pd.notna(b_now) and pd.notna(b_prev) else None,
+        "next": {"exits": exits, "buys": [info(s) for s in ranked[:max(0, free)]],
+                 "reserve": [info(s) for s in ranked[max(0, free):max(0, free) + 5]],
+                 "free": max(0, free), "qualified": len(ranked)},
+    }
 
 
 # ═══════════════════════════════════════════════════════════════ metrics
