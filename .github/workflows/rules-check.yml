@@ -1,0 +1,29 @@
+name: Rules document check
+
+# Keeps RULES.md (shown in the app's Rules tab) in step with the strategy code.
+on:
+  push:
+  pull_request:
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install what rules_doc.py needs
+        run: pip install pandas numpy requests
+      - name: Parameters section of RULES.md matches the code
+        run: python rules_doc.py
+      - name: Warn when strategy code changed but RULES.md did not
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: |
+          changed=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          logic=$(echo "$changed" | grep -E '^(app|bt_engine|bt_data|lender_filter|compare|settings)\.py$' || true)
+          if [ -n "$logic" ] && ! echo "$changed" | grep -qx 'RULES.md'; then
+            echo "::warning title=RULES.md not updated::Strategy code changed ($(echo $logic | tr '\n' ' ')) but RULES.md did not. If the logic changed, update RULES.md and its change log."
+          fi

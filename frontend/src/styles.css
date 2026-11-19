@@ -443,3 +443,33 @@ button, input, select { font: inherit; color: inherit; }
 .compare-panel .toolbar-actions { align-items: center; }
 .compare-panel .run-btn { margin-top: 0; }
 .compare-panel.dimmed { opacity: 0.45; }
+
+/* ===== rules tab ===== */
+.rules-page { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 20px; align-items: start; }
+.rules-toc { position: sticky; top: 12px; font-size: 13px; }
+.rules-toc-title { font-family: var(--display); font-weight: 650; font-size: 15px; margin: 4px 0 8px; }
+.rules-toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.rules-toc button { width: 100%; text-align: left; background: none; border: 0; padding: 6px 8px; border-radius: 7px; cursor: pointer; color: var(--ink-2); line-height: 1.3; }
+.rules-toc button:hover { background: #dde6ea; color: var(--ink); }
+.rules-toc button.on { background: var(--surface); color: var(--ink); box-shadow: inset 2px 0 0 var(--teal-700); }
+.rules-updated, .rules-src { margin: 14px 8px 0; font-size: 12px; color: var(--ink-3); }
+.rules-src a { color: var(--teal-700); }
+.rules-body { margin-top: 0; padding: 22px clamp(18px, 3vw, 40px) 30px; font-size: 14.5px; line-height: 1.6; }
+.rules-body > * { max-width: 80ch; }
+.rules-body h1 { font-family: var(--display); font-size: 30px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 12px; }
+.rules-body h2 { font-family: var(--display); font-size: 21px; font-weight: 650; letter-spacing: -0.01em; margin: 30px 0 10px; scroll-margin-top: 12px; }
+.rules-body h3 { font-size: 15px; font-weight: 650; margin: 20px 0 6px; }
+.rules-body p { margin: 0 0 10px; }
+.rules-body ul, .rules-body ol { margin: 0 0 12px; padding-left: 22px; }
+.rules-body li { margin: 3px 0; }
+.rules-body hr { border: 0; border-top: 1px solid var(--line); margin: 26px 0 0; max-width: none; }
+.rules-body code { font-size: 12.5px; background: #eef3f5; border-radius: 4px; padding: 1px 5px; }
+.rules-body strong { font-weight: 650; }
+.rules-body table { border-collapse: collapse; width: 100%; max-width: none; font-size: 13px; margin: 6px 0 14px; display: block; overflow-x: auto; }
+.rules-body th, .rules-body td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); }
+.rules-body thead th { font-weight: 600; color: var(--ink-2); border-bottom: 1px solid var(--ink); background: #f4f8f9; position: sticky; top: 0; }
+.rules-body a { color: var(--teal-700); }
+@media (max-width: 900px) {
+  .rules-page { grid-template-columns: 1fr; }
+  .rules-toc { position: static; }
+}

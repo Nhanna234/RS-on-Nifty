@@ -19,30 +19,23 @@ import bt_data
 import bt_engine
 import compare
 import lender_filter
+import rules_doc
+import settings
 
 # After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
 # modules in memory. Reload any whose file has changed since it was loaded.
-for _mod in (bt_data, bt_engine, lender_filter, compare):
+for _mod in (settings, bt_data, bt_engine, lender_filter, compare, rules_doc):
     _mtime = os.path.getmtime(_mod.__file__)
     if getattr(_mod, "_loaded_mtime", None) != _mtime:
         importlib.reload(_mod)
         _mod._loaded_mtime = _mtime
 
+from settings import (BT_DEFAULTS, COMPARE_ORDER, DEFAULT_INDEX, INDEX_FILES, LONG_START, LOOKBACK_MONTHS,  # noqa: E402
+                      RS_INDEX_TICKER, RS_TRAIL_MONTHS, SCREENER_DEFAULTS, SCREENER_PRICE_PERIOD, WEEKLY_CR_REQ,
+                      WEEKLY_RET_REQ)
+
 # --- STANDARD INDEX UNIVERSES ---
 # Official NSE Indices constituent files (columns: Company Name, Industry, Symbol, Series, ISIN Code)
-INDEX_FILES = {
-    "Nifty 50": "ind_nifty50list.csv",
-    "Nifty 100": "ind_nifty100list.csv",
-    "Nifty 200": "ind_nifty200list.csv",
-    "Nifty LargeMidcap 250": "ind_niftylargemidcap250list.csv",
-    "Nifty Midcap 150": "ind_niftymidcap150list.csv",
-    "Nifty Smallcap 100": "ind_niftysmallcap100list.csv",
-    "Nifty Smallcap 250": "ind_niftysmallcap250list.csv",
-    "Nifty Microcap 250": "ind_niftymicrocap250_list.csv",
-    "Nifty 500": "ind_nifty500list.csv",
-    "Nifty Total Market": "ind_niftytotalmarket_list.csv",
-}
-DEFAULT_INDEX = "Nifty Total Market"
 CONSTITUENT_MIRRORS = [
     "https://niftyindices.com/IndexConstituent/{f}",
     "https://www.niftyindices.com/IndexConstituent/{f}",
@@ -192,13 +185,13 @@ class RSHeatmapScreener:
         self.rs_threshold = rs_threshold / 100.0
         self.lookback_months = lookback_months
         self.output_history = output_history
-        self.index_ticker = "^NSEI"
+        self.index_ticker = RS_INDEX_TICKER
         self.use_ema = use_ema
         # kept in percent: the filters below compare (value * 100) against these
         self.cr_threshold = cr_threshold
         self.mr_threshold = mr_threshold
 
-    def fetch_data(self, tickers, interval="1mo", period="3y"):
+    def fetch_data(self, tickers, interval="1mo", period=SCREENER_PRICE_PERIOD):
         all_tickers = tickers + [self.index_ticker]
         data = yf.download(all_tickers, period=period, interval=interval, auto_adjust=True)
         if interval == "1mo":
@@ -243,7 +236,7 @@ class RSHeatmapScreener:
             curr_low = low_df[ticker].iloc[-1]
             
             if self.use_ema:
-                ema_12 = stock_prices[ticker].ewm(span=12, adjust=False).mean().iloc[-1]
+                ema_12 = stock_prices[ticker].ewm(span=bt_engine.EMA_SPAN, adjust=False).mean().iloc[-1]
                 if curr_price < ema_12: continue
             
             cr_val = (curr_price - curr_low) / (curr_high - curr_low) if curr_high != curr_low else 0
@@ -283,10 +276,6 @@ class RSHeatmapScreener:
         return pd.DataFrame(matrix_data), month_headers
 
 # --- RESULT BUILDER (prepares everything the React dashboard shows) ---
-LOOKBACK_MONTHS = 12        # RS is compared with its highest month-end value of the past 12 months
-RS_TRAIL_MONTHS = 24        # length of the RS line drawn for each stock
-WEEKLY_CR_REQ = 75
-WEEKLY_RET_REQ = 4
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -512,9 +501,6 @@ def run_screen(req):
 
 
 # --- BACKTEST ---
-BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 98, "useEma": True,
-               "cr": 75, "mr": 5, "cost": 0.2, "cashYield": 6, "capital": 1000000, "ranking": "cr",
-               "excludeLenders": True}
 
 
 @st.cache_resource(max_entries=1)
@@ -660,9 +646,6 @@ def run_backtest(req, progress=None):
 
 
 # --- ALL-INDEX COMPARISON ---
-COMPARE_ORDER = ["Nifty Total Market", "Nifty 500", "Nifty 50", "Nifty 100", "Nifty 200", "Nifty LargeMidcap 250",
-                 "Nifty Midcap 150", "Nifty Smallcap 100", "Nifty Smallcap 250", "Nifty Microcap 250"]
-LONG_START = "2015-01"
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
@@ -786,12 +769,12 @@ progress_slot = st.empty()
 
 request = rs_dashboard(
     indices=list(INDEX_FILES),
-    defaults={"index": DEFAULT_INDEX, "history": 6, "threshold": 100, "useEma": True, "cr": 75, "mr": 5, "weekly": False,
-              "excludeLenders": True},
+    defaults=SCREENER_DEFAULTS,
     result=st.session_state.get("result"),
     btDefaults={**BT_DEFAULTS, "end": str(bt_data.last_completed_month()), "earliest": bt_data.EARLIEST_START,
                 "rankings": bt_engine.RANKINGS},
     btResult=st.session_state.get("bt_result"),
+    rulesMd=rules_doc.rules_for_app(),
     cmpResult=st.session_state.get("cmp_result"),
     key="rs_dashboard",
     default=None,

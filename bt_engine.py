@@ -29,6 +29,7 @@ LOOKBACK = 12
 EMA_SPAN = 12
 AT_HIGH = 1 - 1e-9
 MIN_ALLOC_FRAC = 0.20       # skip a buy if less than 20% of a slot's money is left in cash
+SPIKE_FACTOR = 1.6          # a one-day move of this size that fully reverses next day is a bad price
 RANKINGS = {"cr": "Closing range", "ret6": "6-month return", "ret12": "12-month return"}
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -41,7 +42,8 @@ def clean_daily(daily: dict) -> tuple[dict, int]:
         X[X <= 0] = np.nan
     r = C / C.ffill().shift(1)
     nxt = C.shift(-1) / C
-    spike = ((r > 1.6) & (nxt < 1 / 1.6)) | ((r < 1 / 1.6) & (nxt > 1.6))
+    k = SPIKE_FACTOR
+    spike = ((r > k) & (nxt < 1 / k)) | ((r < 1 / k) & (nxt > k))
     n = int(spike.sum().sum())
     for X in (O, H, L, C):
         X[spike] = np.nan

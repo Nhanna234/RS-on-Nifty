@@ -3,6 +3,7 @@ import { connect, embedded, sendValue, setFrameHeight } from "./streamlit";
 import { SAMPLE_ARGS, sampleResult } from "./sample";
 import { num, signedPct, plural, downloadBlob, copyText, useWidth } from "./util";
 import Backtest from "./Backtest.jsx";
+import Rules from "./Rules.jsx";
 import { LenderControl, LenderNote, useLenderSettings } from "./Lenders.jsx";
 
 /* ---------- app shell ---------- */
@@ -63,12 +64,17 @@ export default function App() {
           <button type="button" className={tab === "backtest" ? "on" : ""} aria-current={tab === "backtest"} onClick={() => setTab("backtest")}>
             Backtest
           </button>
+          <button type="button" className={tab === "rules" ? "on" : ""} aria-current={tab === "rules"} onClick={() => setTab("rules")}>
+            Rules
+          </button>
         </nav>
         <p className="masthead-note">Relative strength against the Nifty 50, from month-end closes. Prices from Yahoo Finance.</p>
       </header>
 
       {!args ? (
         <p className="quiet-note">Loading the screen…</p>
+      ) : tab === "rules" ? (
+        <Rules markdown={args.rulesMd} />
       ) : tab === "backtest" ? (
         <Backtest
           indices={args.indices}

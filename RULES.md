@@ -1,0 +1,268 @@
+# Rules and guidelines
+
+This document describes exactly what the app does: how it builds the list of stocks, how the screener decides what to show, how the backtest buys and sells, and how its results are measured. It is the same text as the **Rules** tab of the app.
+
+**How this document stays current.** It is the single place the rules are written down; the Rules tab displays this file, so one edit updates both GitHub and the website. The **Parameters** section near the end is generated from the code itself, so its numbers cannot drift from what the app really uses. An automatic check on GitHub fails if that section no longer matches the code, and warns when strategy code changes without this file changing. Every change to the logic is recorded in the **Change log** at the end.
+
+Rules describe what the code does. **Guidelines** (section 8) are recommendations for using the results with real money; the code does not enforce them.
+
+---
+
+## 1. Stock universe
+
+**1.1 Index lists.** Each run starts from one of ten Nifty indices (see Parameters). The list of member stocks is downloaded from NSE Indices' official constituent files, trying niftyindices.com and then nsearchives.nseindia.com. Only stocks in the EQ, BE and BZ series are kept. Lists are kept for 24 hours.
+
+**1.2 If an index file cannot be downloaded.** Two indices are rebuilt from others, using NSE's own definitions:
+- Nifty Total Market = Nifty 500 + Nifty Microcap 250.
+- Nifty Midcap 150 = Nifty LargeMidcap 250 minus Nifty 100.
+
+Any other index that fails to download stops the run with a message.
+
+**1.3 Your own list.** An uploaded CSV replaces the index completely. It needs a `Symbols` (or `Symbol`) column; `Sector` (or `Industry`) and `ISIN` (or `ISIN Code`) are optional. Symbols written as `NSE:TCS`, `TCS.NS` or `tcs` are all read as `TCS`. In the backtest's "Compare all indices", uploaded lists are not used.
+
+**1.4 Lending companies (switch, on by default).** When the switch is on, lenders are removed from the universe before anything else happens.
+- A company is a lender when NSE Indices' **Basic Industry** (the most detailed level of NSE's industry classification, which describes the company's core business) is Public Sector Bank, Private Sector Bank, Other Bank (small finance, payment and foreign banks), Non Banking Financial Company (NBFC), Housing Finance Company or Financial Institution.
+- Insurers, fund houses, brokers, exchanges, depositories, rating agencies, fintech, holding companies and investment companies are **not** lenders under this rule and stay in.
+- The Basic Industry is read from NSE's quote data, only for stocks whose broad sector is Financial Services, and kept for 30 days.
+- If NSE does not answer, these fallback rules decide instead, and the results say so: "Bank" in the company name; membership of NSE's Nifty NBFC index; housing-finance or lending words in the company name (excluding names with insurance, asset management, holding, exchange, depository, registrar, broking or securities); a short list of government financial institutions (see Parameters).
+- Your **Always exclude** and **Never exclude** symbol lists override everything above. They are remembered in your browser.
+- Every run lists the companies left out and the other financial companies kept, with the source of each decision.
+
+---
+
+## 2. Definitions used everywhere
+
+**2.1 Relative strength (RS).** A stock's month-end closing price divided by the Nifty 50 price index's month-end close. Stock prices are adjusted for splits and dividends; the Nifty 50 price index is not, which slightly favours high-dividend stocks.
+
+**2.2 RS ratio ("RS of high", shown as a percentage).** This month's RS divided by the highest month-end RS of the last 12 months, the current month included. 100% means RS is at a new 12-month high; 97% means it is 3% below its 12-month high.
+- The screener needs at least 13 month-ends of history for a stock (the current one plus 12 before it); the backtest needs 12. This only matters for recently listed stocks.
+
+**2.3 12-month EMA.** The exponential moving average of month-end closes with a span of 12 months (smoothing factor 2/13), started from the first available month.
+
+**2.4 Closing range (CR).** Where the month's close sits between the month's low and high: (close − low) ÷ (high − low). 100% means it closed at the month's high. If high equals low, CR is 0%.
+
+**2.5 Monthly return (MR).** This month's close ÷ last month's close − 1.
+
+**2.6 Month labels.** In the backtest, a month means the month the stocks were **held**. "Oct 2026" is the portfolio chosen at the September close, bought at October's first open and valued at the October close.
+
+**2.7 When a month is complete.** A month counts as complete from 5 pm IST on its last weekday. Before that, its numbers are provisional. A month whose last weekday is a market holiday completes a day late, which is safe.
+
+---
+
+## 3. Screener rules
+
+**3.1 Prices.** Three years of monthly prices from Yahoo Finance, adjusted for splits and dividends. If Yahoo returns two rows for one month, they are merged (highest high, lowest low, latest close).
+
+**3.2 Latest-month filters.** A stock is considered only if, on the **latest month in the data**, it passes all switched-on filters:
+- close at or above its 12-month EMA (switch);
+- closing range at or above the minimum;
+- monthly return at or above the minimum.
+
+The latest month is usually the running month, so these filters are provisional until the month ends.
+
+**3.3 The month cells.** For each of the months shown, the stock's RS ratio is computed:
+- 100%: a new 12-month RS high (dark cell, shown as 100);
+- at or above the RS threshold but below 100%: a light cell, shown rounded down (for example 98);
+- below the threshold: shown as the RS ratio in grey, not marked.
+
+**3.4 Who is listed.** A stock is listed if it passes the latest-month filters **and** is marked in at least one of the months shown. It does not have to be marked in the latest month; use "Marked in [latest month] only" to see those.
+
+**3.5 Weekly drill-down (switch, off by default).** Keeps only listed stocks whose latest week's return is above 4% **and** whose latest week's closing range is above 75% (strictly above). The latest day's closing range and change are shown for information only; they do not filter.
+
+**3.6 Run, Close in range and the RS line.** "Run" counts consecutive marked months ending at the latest month. "Close in range" is the latest month's closing range. The RS line shows 24 months, starting at 100.
+
+---
+
+## 4. Backtest rules
+
+The backtest decides at each **month-end close** and trades at the **first open of the next month**.
+
+**4.1 Prices.** Daily prices from Yahoo Finance from 2010, adjusted for splits and dividends, kept on the server so later runs only fetch new days. Before use:
+- zero or negative prices are removed;
+- a one-day move of 1.6× (or 1/1.6) that fully reverses the next day is treated as a bad price and removed;
+- each day's high and low are widened to include its open and close.
+
+Daily prices are then turned into monthly candles: open = the month's first open, high = highest high, low = lowest low, close = last close. A month with no close is missing for that stock. Only completed months are used (2.7).
+
+**4.2 Buy rule (checked at each month-end, for stocks not already held).** A stock qualifies when all of these are true:
+1. its RS ratio is 100%, **or** its RS ratio is at least the minimum RS threshold **and** higher than its RS ratio two month-ends earlier;
+2. close at or above its 12-month EMA (if the EMA switch is on);
+3. closing range at or above the minimum;
+4. monthly return at or above the minimum;
+5. a price exists at the next month's first open.
+
+**4.3 Ranking.** If more stocks qualify than there are empty slots, they are sorted by the chosen ranking (closing range by default; or 6-month or 12-month price return), highest first; ties are broken by the higher RS ratio, then the higher monthly return, then the symbol in alphabetical order. The top ones fill the empty slots.
+
+**4.4 Sell rule (checked at each month-end, for stocks held).** A stock is sold at the next month's first open when, at the month-end, any of these is true (the first one found is the reason shown):
+1. it has no closing price that month ("Price data stopped");
+2. its RS ratio is below the minimum RS threshold, or cannot be computed ("RS below threshold");
+3. its close is below its 12-month EMA, if the EMA switch is on ("Close below 12-month EMA").
+
+A held stock is **never swapped** for a better candidate. It stays until a sell rule fires.
+
+**4.5 Trading at the next open.**
+- Sells first: proceeds = shares × the first open × (1 − cost). If there is no opening price, the last close is used.
+- Portfolio value at the open = cash + held shares at the opening price.
+- Each new stock gets **1/slots of that value**, paid from cash. If less cash is left, it gets what is left; if that is less than 20% of a slot's money, the stock is not bought ("Not bought for lack of cash").
+- Shares bought = amount × (1 − cost) ÷ the first open. Part-shares are allowed.
+- Holdings are **not rebalanced**: winners keep growing; nothing is trimmed.
+
+**4.6 Cash.** Empty slots and leftover money stay in cash, which earns the cash yield (the yearly rate converted to a monthly rate) every month.
+
+**4.7 Valuation.** The portfolio is valued at each month-end close (a stock without a close that month is valued at its last close).
+
+**4.8 Period.** Start month from January 2012; end month at most the last completed month. The portfolio starts in cash at the close of the month before the start month.
+
+**4.9 Trade records.** A trade's return includes the cost on both sides. Months held = sell month − buy month. Positions still open at the end are valued at the last close without a selling cost and marked "Still held".
+
+**4.10 Benchmark.** The Nifty 50 Total Return Index from niftyindices.com; if that is not available, the Nifty 50 price index (the report says which was used).
+
+**4.11 Path dependence.** Because held stocks are never swapped, the holdings in any month depend on the start month. Two backtests with different start months can hold different stocks in the same month.
+
+---
+
+## 5. Current month and orders
+
+**5.1 Orders for the next open.** When the backtest ends at the last completed month, the app shows the orders for the next month's first open, decided at that month-end close (final, not provisional):
+- **Start fresh** (a new portfolio): the top qualifying stocks (4.2, ranked by 4.3), one per slot. Quantity = whole shares of (starting capital ÷ slots) at the month-end close; if one share costs more than that, the quantity is 0 and the app says so. "Next in line" lists five more; the backtest itself never uses them.
+- **Continue the backtest portfolio:** the backtest's own sells (with reasons), holdings to keep, and buys for the free slots, as portfolio weights.
+- If the latest closing prices have not reached Yahoo yet, the panel warns; the next run fetches them again (at most every 20 minutes).
+
+**5.2 The running month.** After the next month has started, the app shows that month's holdings (final: decided at the previous month-end) with their returns so far (provisional), and what the rules would sell and buy if the month closed at the latest prices (provisional until the month ends).
+
+---
+
+## 6. Compare all indices
+
+Runs the current backtest settings on all ten indices, for the chosen period and, if the chosen start is later, also from January 2015 to the same end. Each index is backtested on its own (ranking happens inside that index); the results equal single backtests of the same index. Each run is compared with the Nifty 50 and with the index's own value (its Total Return Index where available, otherwise its price index). Everything is written to one Excel workbook: summary, runs, settings, monthly values, trades and holdings.
+
+---
+
+## 7. How results are measured
+
+- **CAGR:** the yearly growth rate from the first to the last month-end value.
+- **Total return:** last value ÷ first value − 1.
+- **Deepest fall (maximum drawdown):** the largest drop from a previous peak, using month-end values (falls within a month are not seen).
+- **Volatility:** standard deviation of monthly returns × √12.
+- **Sharpe ratio:** average monthly return above the cash yield ÷ standard deviation of monthly returns, × √12.
+- **Calmar:** CAGR ÷ deepest fall.
+- **Months ahead of the index:** share of months in which the strategy's return beat the benchmark's.
+- **Win rate, average winner and loser, median trade, profit factor:** closed trades only; profit factor = total profit of winners ÷ total loss of losers.
+- **Average money invested:** average share of the portfolio in stocks at month-ends.
+
+---
+
+## 8. Guidelines for live use
+
+These are recommendations for following the strategy with real money. The code does not enforce them.
+
+1. **Decide after the month has closed.** Run the backtest after 5 pm IST on the month's last trading day (after about 7 pm is safer, once Yahoo has the final prices). If the orders panel warns that prices are behind, wait and run again.
+2. **Act only on final lists.** Do not trade on anything marked provisional.
+3. **Start fresh, and keep the start month fixed.** A new portfolio should use "Start fresh". Afterwards, always run with the month you started as the start month, so the app's holdings match yours.
+4. **Trade at the open.** Place orders in NSE's pre-open session (9:00 to 9:08 am) or right after 9:15 am on the first trading day of the month. Sell first, then buy.
+5. **Decide the awkward cases in advance and apply them every month:** a stock locked at its upper circuit (buy the next day, or leave the slot in cash); a stock that cannot be sold at its lower circuit (sell the next trading day); a share price above the per-stock amount (buy one share, or leave the slot in cash); whether to use "Next in line" at all.
+6. **No action during the month.** The rules have no stop-loss. Adding one makes it a different strategy; backtest it first.
+7. **Keep a trade log** (date, stock, model price, your fill, quantity, charges) and compare it with the model every month.
+8. **Size for liquidity.** Keep each order a small fraction of the stock's average daily traded value, especially for small and micro caps.
+9. **Remember what the backtest leaves out:** taxes (short-term gains on listed shares are taxed at 20% plus cess for holdings up to 12 months), slippage beyond the cost setting, and survivorship bias (section 9).
+10. **Start small.** Until the live results match the model for a few months, use part of the capital or paper-trade.
+
+---
+
+## 9. Known limitations
+
+- **Survivorship bias.** Today's index members are used for every past month. Companies that collapsed or left the index are missing, which makes results look better than they were, most of all for small and micro caps.
+- **Classification today.** The lending filter uses today's NSE classification for every past month.
+- **Data quality.** Yahoo Finance data for small and micro caps can have gaps or bad prices; only one-day reversals are removed.
+- **Month-end view.** Drawdowns and stops are only seen at month-ends; a stock can fall much further within a month.
+- **Part-shares and fills.** The backtest assumes part-shares and that every order fills at the first open.
+- **Screener and backtest differ** (see section 10).
+
+---
+
+## 10. Screener and backtest: differences
+
+| | Screener | Backtest |
+|---|---|---|
+| Month used for the filters | The latest month, usually still running | Completed months only |
+| RS rule | Marked if at a 12-month high or at/above the threshold, in any shown month | At a 12-month high, or at/above the threshold **and** higher than 2 month-ends earlier |
+| Ranking | None (sorted for display) | Closing range (or chosen ranking), then RS ratio, then monthly return |
+| History needed | 13 month-ends | 12 month-ends |
+| Prices | 3 years of Yahoo monthly prices | Daily prices from 2010, cleaned, turned into monthly candles |
+| Default RS threshold | 100% | 98% |
+
+Use the backtest's orders panel, not the screener, for the stocks to buy.
+
+---
+
+## 11. Parameters
+
+The values the code uses. This section is generated from the code; the website always shows the current values.
+
+<!-- parameters:start (generated by rules_doc.py from the code; do not edit by hand) -->
+| Section | Parameter | Value | Defined in |
+|---|---|---|---|
+| Universes | Default universe (both tabs) | Nifty Total Market | settings.py `DEFAULT_INDEX` |
+| Universes | Indices offered | Nifty 50, Nifty 100, Nifty 200, Nifty LargeMidcap 250, Nifty Midcap 150, Nifty Smallcap 100, Nifty Smallcap 250, Nifty Microcap 250, Nifty 500, Nifty Total Market | settings.py `INDEX_FILES` |
+| Universes | Lending companies excluded by default | On | settings.py `SCREENER_DEFAULTS`, `BT_DEFAULTS` |
+| RS measure | Benchmark for relative strength | Nifty 50 price index (Yahoo `^NSEI`) | settings.py `RS_INDEX_TICKER` |
+| RS measure | Look-back for the RS high (screener / backtest) | 12 / 12 month-ends | settings.py `LOOKBACK_MONTHS`, bt_engine.py `LOOKBACK` |
+| RS measure | EMA length | 12 months | bt_engine.py `EMA_SPAN` |
+| Screener | Months shown | 6 | settings.py `SCREENER_DEFAULTS` |
+| Screener | RS threshold | 100% | settings.py `SCREENER_DEFAULTS` |
+| Screener | Price above 12-month EMA | On | settings.py `SCREENER_DEFAULTS` |
+| Screener | Minimum closing range | 75% | settings.py `SCREENER_DEFAULTS` |
+| Screener | Minimum monthly return | 5% | settings.py `SCREENER_DEFAULTS` |
+| Screener | Weekly drill-down | Off | settings.py `SCREENER_DEFAULTS` |
+| Screener | Weekly drill-down: latest week's return above | 4% | settings.py `WEEKLY_RET_REQ` |
+| Screener | Weekly drill-down: latest week's closing range above | 75% | settings.py `WEEKLY_CR_REQ` |
+| Screener | Price history downloaded | 3y of monthly prices | settings.py `SCREENER_PRICE_PERIOD` |
+| Screener | RS line drawn per stock | 24 months | settings.py `RS_TRAIL_MONTHS` |
+| Backtest | Default start month | 2015-01 | settings.py `BT_DEFAULTS` |
+| Backtest | Default end month | the last completed month | bt_data.py `last_completed_month` |
+| Backtest | Earliest start month | 2012-01 | bt_data.py `EARLIEST_START` |
+| Backtest | Stocks held (slots) | 10 | settings.py `BT_DEFAULTS` |
+| Backtest | Minimum RS threshold | 98% | settings.py `BT_DEFAULTS` |
+| Backtest | Price above 12-month EMA (entry and exit) | On | settings.py `BT_DEFAULTS` |
+| Backtest | Minimum closing range | 75% | settings.py `BT_DEFAULTS` |
+| Backtest | Minimum monthly return | 5% | settings.py `BT_DEFAULTS` |
+| Backtest | Ranking of candidates | Closing range (choices: Closing range, 6-month return, 12-month return) | settings.py `BT_DEFAULTS`, bt_engine.py `RANKINGS` |
+| Backtest | Cost per buy and per sell | 0.2% | settings.py `BT_DEFAULTS` |
+| Backtest | Yield on cash | 6% a year | settings.py `BT_DEFAULTS` |
+| Backtest | Starting capital | ₹1,000,000 | settings.py `BT_DEFAULTS` |
+| Backtest | Smallest buy allowed | 20% of one slot's money | bt_engine.py `MIN_ALLOC_FRAC` |
+| Data | Daily prices kept from | 2010-01-01 | bt_data.py `DATA_START` |
+| Data | Bad-price rule | a one-day move of 1.6× (or 1/1.6) that fully reverses the next day | bt_engine.py `SPIKE_FACTOR` |
+| Data | A day's prices count as final from | 17:00 IST | bt_data.py `SESSION_CUTOFF_IST` |
+| Data | Missing latest close asked again after | 20 minutes | bt_data.py `REFETCH_MINUTES` |
+| Lending filter | Basic industries treated as lending | Public Sector Bank, Private Sector Bank, Other Bank, Non Banking Financial Company (NBFC), Housing Finance Company, Financial Institution | lender_filter.py `LENDING_LABELS` |
+| Lending filter | Fallback list of financial institutions | HUDCO, IFCI, IREDA, IRFC, PFC, RECLTD | lender_filter.py `KNOWN_FIS` |
+| Lending filter | NSE classification kept for | 30 days | lender_filter.py `CACHE_DAYS` |
+| Comparison | Universes compared | Nifty Total Market, Nifty 500, Nifty 50, Nifty 100, Nifty 200, Nifty LargeMidcap 250, Nifty Midcap 150, Nifty Smallcap 100, Nifty Smallcap 250, Nifty Microcap 250 | settings.py `COMPARE_ORDER` |
+| Comparison | Long period starts | 2015-01 | settings.py `LONG_START` |
+<!-- parameters:end -->
+
+---
+
+## 12. Change log
+
+**19 Nov 2026**
+- Added this document and the Rules tab; all adjustable values moved to `settings.py`.
+- Added "Compare all indices": the same settings on all ten indices, for the chosen period and since January 2015, with each index's own value as a second benchmark.
+
+**18 Nov 2026**
+- Added orders for the next open ("Start fresh" and "Continue the backtest portfolio").
+- A month now counts as complete from 5 pm IST on its last weekday (before: on its last calendar day).
+- A stock missing the latest close is fetched again on the next run (at most every 20 minutes), with a warning in the orders panel.
+- Added the lending-companies filter, on by default in both tabs.
+- Added the running month view: final holdings, provisional returns and provisional changes.
+
+**17 Nov 2026**
+- Added the backtest (rules in section 4), agreed as: empty slots in cash; sell only on RS below threshold or close below the 12-month EMA; buy below 100% only if the RS ratio is higher than 2 month-ends earlier; no swapping; no rebalancing; trades at the next month's first open.
+- Screener fix: the minimum closing range and monthly return had been divided by 100 before comparison, so 75% and 5% acted as 0.75% and 0.05%. They now apply as entered.
+
+**16 Nov 2026**
+- Added the ten Nifty index universes (default Nifty Total Market) and the CSV upload that replaces the index.
+- Default RS threshold of the screener changed from 95% to 100%.
+- Fix: when Yahoo returned two rows for one month, the screener failed; the rows are now merged.
+- New dashboard interface.

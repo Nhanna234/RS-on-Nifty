@@ -33,6 +33,7 @@ DATA_START = "2010-01-01"           # earliest daily data kept; backtests can st
 EARLIEST_START = "2012-01"
 FIELDS = ("Open", "High", "Low", "Close")
 SESSION_CUTOFF_IST = (17, 0)        # after 5 pm IST the day's prices count as final
+REFETCH_MINUTES = 20                # a stock missing the latest close is asked again after this long
 
 
 # ════════════════════════════════════════════════════════════════════ time
@@ -155,7 +156,7 @@ class PriceStore:
                 stale.append(s)
             elif need is not None:
                 last = rec["df"].index.max()
-                if need - pd.Timedelta(days=10) <= last < need and rec["fetched"] < now - timedelta(minutes=20):
+                if need - pd.Timedelta(days=10) <= last < need and rec["fetched"] < now - timedelta(minutes=REFETCH_MINUTES):
                     stale.append(s)
         return full, stale
 
