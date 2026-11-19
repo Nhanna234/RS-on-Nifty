@@ -26,11 +26,12 @@ export default function App() {
 
   const result = args?.result || null;
   const btResult = args?.btResult || null;
+  const cmpResult = args?.cmpResult || null;
   useEffect(() => {
     if (!running) return;
-    const done = running.kind === "backtest" ? btResult : result;
+    const done = running.kind === "backtest" ? btResult : running.kind === "compare" ? cmpResult : result;
     if (done && done.nonce === running.nonce) setRunning(null);
-  }, [running, result, btResult]);
+  }, [running, result, btResult, cmpResult]);
 
   const run = (kind, settings, csvFiles) => {
     const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -40,8 +41,8 @@ export default function App() {
       setTimeout(
         () =>
           setArgs((a) =>
-            kind === "backtest"
-              ? { ...a, btResult: { ok: false, nonce, error: "Backtests run in the Python app. Start it with: streamlit run app.py" } }
+            kind === "backtest" || kind === "compare"
+              ? { ...a, [kind === "compare" ? "cmpResult" : "btResult"]: { ok: false, nonce, error: "Backtests run in the Python app. Start it with: streamlit run app.py" } }
               : { ...a, result: sampleResult(nonce, settings) }
           ),
         900
@@ -76,6 +77,9 @@ export default function App() {
           running={btRunning}
           busy={Boolean(running)}
           onRun={(settings, files) => run("backtest", settings, files)}
+          cmpResult={cmpResult}
+          cmpRunning={running?.kind === "compare"}
+          onCompare={(settings) => run("compare", settings, [])}
         />
       ) : (
         <>

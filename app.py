@@ -17,11 +17,12 @@ import importlib
 
 import bt_data
 import bt_engine
+import compare
 import lender_filter
 
 # After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
 # modules in memory. Reload any whose file has changed since it was loaded.
-for _mod in (bt_data, bt_engine, lender_filter):
+for _mod in (bt_data, bt_engine, lender_filter, compare):
     _mtime = os.path.getmtime(_mod.__file__)
     if getattr(_mod, "_loaded_mtime", None) != _mtime:
         importlib.reload(_mod)
@@ -658,6 +659,110 @@ def run_backtest(req, progress=None):
     }
 
 
+# --- ALL-INDEX COMPARISON ---
+COMPARE_ORDER = ["Nifty Total Market", "Nifty 500", "Nifty 50", "Nifty 100", "Nifty 200", "Nifty LargeMidcap 250",
+                 "Nifty Midcap 150", "Nifty Smallcap 100", "Nifty Smallcap 250", "Nifty Microcap 250"]
+LONG_START = "2015-01"
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_index_tri(index_name, cutoff_key):
+    """Month-end values of the index itself (TRI if possible), to compare each run with its own universe."""
+    start, end = pd.Timestamp("2014-01-01").date(), bt_data.now_ist().date()
+    for kind, label in (("TRI", f"{index_name} Total Return Index"),
+                        ("PRICE", f"{index_name} price index (TRI unavailable)")):
+        try:
+            return bt_data.monthly_last(bt_data.fetch_index_niftyindices(index_name.upper(), start, end, kind)), label
+        except Exception:
+            continue
+    return None, "unavailable"
+
+
+def run_compare(req, progress=None, step=None):
+    """The current backtest settings on every index, for the chosen period and since Jan 2015."""
+    last_done = bt_data.last_completed_month()
+    try:
+        start = pd.Period(str(req.get("start") or BT_DEFAULTS["start"]), "M")
+        end = min(pd.Period(str(req.get("end") or last_done), "M"), last_done)
+    except Exception:
+        return {"ok": False, "error": "Start and end must be months, for example 2025-01."}
+    start = max(start, pd.Period(bt_data.EARLIEST_START, "M"))
+    if (end - start).n < 2:
+        return {"ok": False, "error": "Choose an end month at least three months after the start month."}
+    periods = [(f"{start.strftime('%b %Y')} to {end.strftime('%b %Y')}", start, end)]
+    long_start = pd.Period(LONG_START, "M")
+    if start > long_start:
+        periods.append((f"{long_start.strftime('%b %Y')} to {end.strftime('%b %Y')}", long_start, end))
+
+    p = {
+        "slots": int(min(50, max(1, int(req.get("slots", 10))))),
+        "threshold": min(100.0, max(50.0, float(req.get("threshold", 98)))) / 100.0,
+        "use_ema": bool(req.get("useEma", True)),
+        "cr_min": float(req.get("cr", 75)), "mr_min": float(req.get("mr", 5)),
+        "cost": max(0.0, float(req.get("cost", 0.2))) / 100.0,
+        "cash_yield": float(req.get("cashYield", 6)) / 100.0,
+        "capital": max(1000.0, float(req.get("capital", 1_000_000))),
+        "ranking": req.get("ranking") if req.get("ranking") in bt_engine.RANKINGS else "cr",
+    }
+
+    if step:
+        step("Loading index lists")
+    universes = {}
+    for name in COMPARE_ORDER:
+        u = resolve_universe({**req, "index": name, "csvFiles": []})
+        if "error" in u:
+            continue
+        syms = sorted(set(u["symbols"]))
+        universes[name] = {"symbols": syms, "sectors": {s: u["sector_map"][s]["Sector"] for s in syms},
+                           "count": len(syms), "lenders": len((u.get("lenders") or {}).get("excluded", []))}
+    if not universes:
+        return {"ok": False, "error": "Could not load any index list from NSE. Run it again in a few minutes."}
+    all_syms = sorted(set().union(*[set(u["symbols"]) for u in universes.values()]))
+
+    store = price_store()
+    cutoff = bt_data.last_cutoff()
+    store.update(all_syms, cutoff, progress, need_date=bt_data.last_session_date())
+    if step:
+        step("Preparing monthly prices")
+    try:
+        monthly, spikes = bt_engine.monthly_in_batches(store.panel, all_syms, end)
+    except RuntimeError:
+        return {"ok": False, "error": "Yahoo Finance returned no price data. Wait a minute and run it again."}
+    try:
+        rs_index = load_rs_index(cutoff.isoformat())
+    except Exception as e:
+        return {"ok": False, "error": f"Could not download the Nifty 50 index from Yahoo Finance ({e}). Run it again."}
+    try:
+        bench, bench_source = load_benchmark(cutoff.isoformat())
+    except Exception:
+        bench, bench_source = pd.Series(dtype=float), "unavailable"
+    if step:
+        step("Fetching each index's own values")
+    own = {name: load_index_tri(name, cutoff.isoformat()) for name in universes}
+
+    ind = bt_engine.indicators(monthly, rs_index)
+    res = compare.run_all(monthly, ind, universes, p, periods, bench, bench_source, own,
+                          progress=(lambda k, n, what: step(f"Backtesting {what} ({k} of {n})")) if step else None)
+    settings_rows = [
+        ("Stocks held", p["slots"]), ("Minimum RS threshold %", p["threshold"] * 100),
+        ("Price above 12-month EMA", "Yes" if p["use_ema"] else "No"), ("Min closing range %", p["cr_min"]),
+        ("Min monthly return %", p["mr_min"]), ("Ranking", bt_engine.RANKINGS[p["ranking"]]),
+        ("Cost per buy and per sell %", p["cost"] * 100), ("Cash yield % a year", p["cash_yield"] * 100),
+        ("Starting capital", p["capital"]),
+        ("Lending companies", "Excluded" if req.get("excludeLenders", True) else "Included"),
+        ("Always exclude", req.get("alwaysExclude") or ""), ("Never exclude", req.get("neverExclude") or ""),
+        ("Nifty 50 benchmark", bench_source), ("One-day bad prices removed", spikes),
+        ("Run at", bt_data.now_ist().strftime("%d %b %Y, %H:%M IST")),
+    ]
+    return {
+        "ok": True, "kind": "compare",
+        "asOf": bt_data.now_ist().strftime("%d %b %Y, %H:%M IST"),
+        "periods": [x[0] for x in periods],
+        "summary": [{k: v for k, v in r.items()} for r in res["summary"]],
+        "excel": base64.b64encode(compare.to_excel(res, settings_rows)).decode("ascii"),
+    }
+
+
 # --- PAGE (the interface is the React app in frontend/, built into frontend/dist) ---
 st.set_page_config(page_title="Abdullah RS Pro", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
@@ -687,6 +792,7 @@ request = rs_dashboard(
     btDefaults={**BT_DEFAULTS, "end": str(bt_data.last_completed_month()), "earliest": bt_data.EARLIEST_START,
                 "rankings": bt_engine.RANKINGS},
     btResult=st.session_state.get("bt_result"),
+    cmpResult=st.session_state.get("cmp_result"),
     key="rs_dashboard",
     default=None,
 )
@@ -694,18 +800,26 @@ request = rs_dashboard(
 # A new request carries a new id; results are kept in the session so they survive reruns
 if request and request.get("nonce") and request["nonce"] != st.session_state.get("last_nonce"):
     st.session_state["last_nonce"] = request["nonce"]
-    is_backtest = request.get("kind") == "backtest"
+    kind = request.get("kind", "screen")
 
     def show_progress(done, total):
         progress_slot.progress(min(1.0, done / max(1, total)),
                                text=f"Downloading daily prices: {done} of {total} stocks")
 
+    def show_step(text):
+        progress_slot.info(text)
+
     try:
-        outcome = run_backtest(request, show_progress) if is_backtest else run_screen(request)
+        if kind == "backtest":
+            outcome = run_backtest(request, show_progress)
+        elif kind == "compare":
+            outcome = run_compare(request, show_progress, show_step)
+        else:
+            outcome = run_screen(request)
     except Exception as e:
-        what = "backtest" if is_backtest else "screen"
+        what = {"backtest": "backtest", "compare": "comparison"}.get(kind, "screen")
         outcome = {"ok": False, "error": f"The {what} stopped with an error: {type(e).__name__}: {e}"}
     progress_slot.empty()
     outcome["nonce"] = request["nonce"]
-    st.session_state["bt_result" if is_backtest else "result"] = outcome
+    st.session_state[{"backtest": "bt_result", "compare": "cmp_result"}.get(kind, "result")] = outcome
     st.rerun()

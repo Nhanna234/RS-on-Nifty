@@ -26,10 +26,23 @@ const monthKeyLabel = (key) => {
 };
 
 /* ---------- page ---------- */
-export default function Backtest({ indices, defaults, result, running, busy, onRun }) {
+export default function Backtest({ indices, defaults, result, running, busy, onRun, cmpResult, cmpRunning, onCompare }) {
   return (
     <>
-      <BtControls indices={indices} defaults={defaults} running={running} busy={busy} onRun={onRun} />
+      <BtControls indices={indices} defaults={defaults} running={running} busy={busy} onRun={onRun} onCompare={onCompare} cmpRunning={cmpRunning} />
+      {cmpRunning && (
+        <div className="banner banner-run" role="status">
+          <span className="pulse-dot" aria-hidden="true" />
+          Backtesting all ten indices with these settings, for your period and since Jan 2015. The first time this can take
+          5 to 10 minutes (it downloads every stock in the Nifty Total Market); progress shows above this page.
+        </div>
+      )}
+      {cmpResult && !cmpResult.ok && !cmpRunning && (
+        <div className="banner banner-error" role="alert">
+          {cmpResult.error}
+        </div>
+      )}
+      {cmpResult && cmpResult.ok && <CompareSummary c={cmpResult} dimmed={cmpRunning} />}
       {running && (
         <div className="banner banner-run" role="status">
           <span className="pulse-dot" aria-hidden="true" />
@@ -52,7 +65,7 @@ export default function Backtest({ indices, defaults, result, running, busy, onR
 }
 
 /* ---------- settings ---------- */
-function BtControls({ indices, defaults, running, busy, onRun }) {
+function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRunning }) {
   const [s, setS] = useState(defaults);
   const [files, setFiles] = useState([]);
   const [lend, setLend] = useLenderSettings(defaults.excludeLenders !== false);
@@ -66,14 +79,12 @@ function BtControls({ indices, defaults, running, busy, onRun }) {
     e.target.value = "";
   };
 
-  const submit = (e) => {
-    e.preventDefault();
+  const settings = () => {
     const n = (v, lo, hi, fb) => {
       const x = Number(v);
       return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : fb;
     };
-    onRun(
-      {
+    return {
         index: s.index,
         start: s.start,
         end: s.end,
@@ -87,9 +98,11 @@ function BtControls({ indices, defaults, running, busy, onRun }) {
         cashYield: n(s.cashYield, 0, 20, 6),
         capital: n(s.capital, 1000, 1e12, 1e6),
         ...lend,
-      },
-      files
-    );
+      };
+  };
+  const submit = (e) => {
+    e.preventDefault();
+    onRun(settings(), files);
   };
 
   return (
@@ -179,9 +192,20 @@ function BtControls({ indices, defaults, running, busy, onRun }) {
         </label>
         <LenderControl value={lend} onChange={setLend} idPrefix="b" />
       </div>
-      <button className="run-btn" type="submit" disabled={busy}>
-        {running ? "Running…" : "Run backtest"}
-      </button>
+      <div className="bt-buttons">
+        <button className="run-btn" type="submit" disabled={busy}>
+          {running ? "Running…" : "Run backtest"}
+        </button>
+        <button
+          className="ghost-btn"
+          type="button"
+          disabled={busy}
+          onClick={() => onCompare(settings())}
+          title="Same settings, all ten indices, your period and since Jan 2015, in one Excel file"
+        >
+          {cmpRunning ? "Comparing…" : "Compare all indices"}
+        </button>
+      </div>
     </form>
   );
 }
@@ -211,6 +235,73 @@ function BtIntro({ defaults }) {
             <dd>Nifty 50 Total Return Index</dd>
           </div>
         </dl>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- all-index comparison ---------- */
+function CompareSummary({ c, dimmed }) {
+  const [period, setPeriod] = useState(c.periods[0]);
+  useEffect(() => setPeriod(c.periods[0]), [c.nonce]);
+  const rows = c.summary.filter((r) => r.Period === period).sort((a, b) => (b.CAGR ?? -9) - (a.CAGR ?? -9));
+  const download = () => {
+    const bytes = Uint8Array.from(atob(c.excel), (ch) => ch.charCodeAt(0));
+    downloadBlob("RS_all_indices.xlsx", new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+  };
+  return (
+    <section className={`panel compare-panel${dimmed ? " dimmed" : ""}`}>
+      <div className="live-head">
+        <div>
+          <h3>All indices, same settings</h3>
+          <p className="chart-hint">Run at {c.asOf}. Sorted by annual return. The Excel file has every month, trade and holding for each index.</p>
+        </div>
+        <div className="toolbar-actions">
+          {c.periods.length > 1 && (
+            <div className="seg" role="group" aria-label="Period">
+              {c.periods.map((p) => (
+                <button type="button" key={p} className={period === p ? "on" : ""} onClick={() => setPeriod(p)}>
+                  {p}
+                </button>
+              ))}
+            </div>
+          )}
+          <button type="button" className="run-btn" onClick={download}>
+            Download comparison (Excel)
+          </button>
+        </div>
+      </div>
+      <div className="log-scroll orders-table">
+        <table className="log">
+          <thead>
+            <tr>
+              <th scope="col">Universe</th>
+              <th scope="col" className="num">Annual return</th>
+              <th scope="col" className="num">Deepest fall</th>
+              <th scope="col" className="num">Own index return</th>
+              <th scope="col" className="num">Nifty 50 return</th>
+              <th scope="col" className="num">Sharpe</th>
+              <th scope="col" className="num">Trades</th>
+              <th scope="col" className="num">Won</th>
+              <th scope="col" className="num">Avg invested</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.Index}>
+                <th scope="row" className="stock-symbol">{r.Index}</th>
+                <td className={`num${r.CAGR < 0 ? " neg" : ""}`}>{pct(r.CAGR)}</td>
+                <td className="num neg">{pct(r["Max drawdown"])}</td>
+                <td className="num">{pct(r["Own index CAGR"])}</td>
+                <td className="num">{pct(r["Nifty 50 CAGR"])}</td>
+                <td className="num">{num(r.Sharpe, 2)}</td>
+                <td className="num">{num(r.Trades, 0)}</td>
+                <td className="num">{pct(r["Win rate"], 0)}</td>
+                <td className="num">{pct(r["Avg invested"], 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </section>
   );
