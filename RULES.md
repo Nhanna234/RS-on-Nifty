@@ -264,6 +264,9 @@ The values the code uses. This section is generated from the code; the website a
 
 ## 12. Change log
 
+**21 Nov 2026 (evening)**
+- The website now asks for a username and password. Accounts are kept in the app's Secrets in Streamlit Cloud (no database); passwords are stored only in scrambled form. No change to any screener or backtest rule.
+
 **21 Nov 2026**
 - Added the **Nasdaq 100** universe (section 1.5). For it, relative strength is measured against the S&P 500 instead of the Nifty 50, the benchmark is the S&P 500 Total Return Index, money is in US dollars ($10,000 default capital), and a day counts as final from 8 pm New York time. The member list comes from Nasdaq, with Wikipedia and a saved snapshot as fallbacks.
 - An uploaded CSV is now read as stocks of the market of the selected index (NSE stocks with a Nifty index, US stocks with the Nasdaq 100).

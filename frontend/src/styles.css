@@ -473,3 +473,7 @@ button, input, select { font: inherit; color: inherit; }
   .rules-page { grid-template-columns: 1fr; }
   .rules-toc { position: static; }
 }
+
+/* signed-in user */
+.account { display: inline-flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--ink-3); }
+.account strong { color: var(--ink); font-weight: 600; }

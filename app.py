@@ -15,6 +15,7 @@ import streamlit.components.v1 as components
 
 import importlib
 
+import auth
 import bt_data
 import bt_engine
 import compare
@@ -25,7 +26,7 @@ import us_universe
 
 # After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
 # modules in memory. Reload any whose file has changed since it was loaded.
-for _mod in (settings, bt_data, bt_engine, lender_filter, compare, us_universe, rules_doc):
+for _mod in (settings, auth, bt_data, bt_engine, lender_filter, compare, us_universe, rules_doc):
     _mtime = os.path.getmtime(_mod.__file__)
     if getattr(_mod, "_loaded_mtime", None) != _mtime:
         importlib.reload(_mod)
@@ -830,6 +831,98 @@ if not (FRONTEND_DIR / "index.html").exists():
     st.error("The dashboard files are missing (frontend/dist). Build them with: cd frontend && npm install && npm run build")
     st.stop()
 
+# --- SIGN-IN (accounts live in the app's Secrets; see auth.py) ---
+LOGIN_CSS = """
+<style>
+  [data-testid="stMainBlockContainer"], .block-container { padding: 7vh 1rem 2rem !important; }
+  [data-testid="stForm"] { background: #fff; border: 1px solid #d5dee3; border-radius: 14px; padding: 1.6rem 1.6rem 1.2rem; }
+  div.login-title { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; color: #0f1c2e; margin: 0 0 .25rem; }
+  div.login-sub { color: #52606d; margin: 0 0 1.2rem; }
+</style>
+"""
+
+
+@st.cache_resource
+def attempt_log():
+    """Wrong-password counts, shared by everyone using the app (cleared when the app restarts)."""
+    return auth.AttemptLog()
+
+
+def setup_page():
+    """Shown while no accounts exist: the website stays locked; this page only makes the first Secrets entry."""
+    st.markdown(LOGIN_CSS, unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1.6, 1])
+    with mid:
+        st.markdown('<div class="login-title">Set up sign-in</div><div class="login-sub">No accounts exist yet, so the '
+                    'website is locked. Choose your administrator username and password below. This page only '
+                    'makes the text to paste; nothing is saved here.</div>', unsafe_allow_html=True)
+        with st.form("setup"):
+            name = st.text_input("Your username", help=auth.USERNAME_HELP)
+            pw = st.text_input("Password", type="password")
+            pw2 = st.text_input("Password again", type="password")
+            go = st.form_submit_button("Make my Secrets text", type="primary", width="stretch")
+        if go:
+            name = auth.clean_username(name)
+            problem = (None if auth.USERNAME_RULE.match(name) else f"Username: {auth.USERNAME_HELP}.") \
+                or auth.password_problem(pw, pw2)
+            if problem:
+                st.error(problem)
+            else:
+                st.success("Copy all of this. In Streamlit Cloud open this app's Settings, then Secrets, paste it, "
+                           "and press Save. The app restarts and asks you to sign in.")
+                st.code(auth.secrets_block(name, auth.hash_password(pw)), language="toml")
+
+
+def login_page(cfg):
+    st.markdown(LOGIN_CSS, unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1.2, 1])
+    with mid:
+        st.markdown('<div class="login-title">Abdullah RS Leaderboard</div>'
+                    '<div class="login-sub">Sign in to continue.</div>', unsafe_allow_html=True)
+        with st.form("login"):
+            name = st.text_input("Username", autocomplete="username")
+            pw = st.text_input("Password", type="password", autocomplete="current-password")
+            remember = st.checkbox(f"Keep me signed in on this device for {auth.REMEMBER_DAYS} days", value=True,
+                                   help="Leave this off on a shared computer.")
+            go = st.form_submit_button("Sign in", type="primary", width="stretch")
+        if go:
+            ok, message = auth.check_login(cfg, attempt_log(), name, pw)
+            if ok:
+                user = auth.clean_username(name)
+                st.session_state["user"] = user
+                st.session_state["signed_out"] = False
+                st.session_state["new_token"] = auth.make_token(cfg, user) if remember else ""
+                st.rerun()
+            st.error(message)
+        st.caption("No account? Ask the site's owner.")
+
+
+def signed_in_user():
+    """The signed-in username; otherwise draws the sign-in (or setup) page and stops the script."""
+    cfg = auth.load_config(st.secrets)
+    if not cfg["users"]:
+        setup_page()
+        st.stop()
+    user = st.session_state.get("user")
+    if user and user not in cfg["users"]:              # account removed from Secrets meanwhile
+        user = None
+        st.session_state.pop("user", None)
+    if not user and not st.session_state.get("signed_out"):
+        try:
+            cookie = st.context.cookies.get(auth.COOKIE_NAME)
+        except Exception:  # noqa: BLE001
+            cookie = None
+        user = auth.read_token(cfg, cookie)
+        if user:
+            st.session_state["user"] = user
+    if not user:
+        login_page(cfg)
+        st.stop()
+    return user, cfg
+
+
+current_user, login_cfg = signed_in_user()
+
 rs_dashboard = components.declare_component("rs_dashboard", path=str(FRONTEND_DIR))
 
 progress_slot = st.empty()
@@ -847,6 +940,10 @@ request = rs_dashboard(
     btResult=st.session_state.get("bt_result"),
     rulesMd=rules_doc.rules_for_app(),
     cmpResult=st.session_state.get("cmp_result"),
+    user={"name": current_user, "admin": current_user in login_cfg["admins"],
+          # a new "keep me signed in" cookie for the dashboard to store; "" removes it
+          "token": st.session_state.get("new_token"), "cookie": auth.COOKIE_NAME,
+          "days": auth.REMEMBER_DAYS},
     key="rs_dashboard",
     default=None,
 )
@@ -855,6 +952,14 @@ request = rs_dashboard(
 if request and request.get("nonce") and request["nonce"] != st.session_state.get("last_nonce"):
     st.session_state["last_nonce"] = request["nonce"]
     kind = request.get("kind", "screen")
+    if kind == "tokenSaved":                            # the dashboard has stored (or removed) the cookie
+        st.session_state.pop("new_token", None)
+        st.rerun()
+    if kind == "logout":
+        for k in ("user", "new_token", "result", "bt_result", "cmp_result"):
+            st.session_state.pop(k, None)
+        st.session_state["signed_out"] = True            # do not sign straight back in from the old cookie
+        st.rerun()
 
     def show_progress(done, total):
         progress_slot.progress(min(1.0, done / max(1, total)),
@@ -877,3 +982,32 @@ if request and request.get("nonce") and request["nonce"] != st.session_state.get
     outcome["nonce"] = request["nonce"]
     st.session_state[{"backtest": "bt_result", "compare": "cmp_result"}.get(kind, "result")] = outcome
     st.rerun()
+
+
+# --- ACCOUNT TOOLS (administrators only) ---
+if current_user in login_cfg["admins"]:
+    st.markdown("<style>[data-testid='stExpander'] { margin: 8px 24px 24px; }</style>", unsafe_allow_html=True)
+    with st.expander("Account tools (only administrators see this)"):
+        st.markdown("To **add a person** or **change a password**: make the line here, then in Streamlit Cloud open "
+                    "this app's Settings, then Secrets, and put the line under `[login.users]` (replace the "
+                    "person's old line when changing a password). To **remove a person**, delete their line. "
+                    "Press Save; the app restarts. Make someone an administrator by adding their username to "
+                    "`admins`.")
+        with st.form("make_user"):
+            c1, c2, c3 = st.columns(3)
+            new_name = c1.text_input("Username", help=auth.USERNAME_HELP)
+            new_pw = c2.text_input("Password", type="password")
+            new_pw2 = c3.text_input("Password again", type="password")
+            made = st.form_submit_button("Make the line")
+        if made:
+            new_name = auth.clean_username(new_name)
+            problem = (None if auth.USERNAME_RULE.match(new_name) else f"Username: {auth.USERNAME_HELP}.") \
+                or auth.password_problem(new_pw, new_pw2)
+            if problem:
+                st.error(problem)
+            else:
+                st.code(auth.user_line(new_name, auth.hash_password(new_pw)), language="toml")
+                st.caption("Send the person their username and password yourself (not by the same message, ideally). "
+                           "The password is not stored anywhere; only this scrambled line is.")
+        st.caption(f"Accounts now: {', '.join(sorted(login_cfg['users']))}. Administrators: "
+                   f"{', '.join(sorted(login_cfg['admins']))}.")

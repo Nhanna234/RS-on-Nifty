@@ -50,6 +50,22 @@ export default function App() {
       );
   };
 
+  // "keep me signed in": store (or remove) the cookie the server signed, then tell the server it is done
+  const user = args?.user || null;
+  useEffect(() => {
+    if (!embedded || !user || user.token == null) return;
+    const secure = window.location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = user.token
+      ? `${user.cookie}=${user.token}; path=/; max-age=${user.days * 86400}; SameSite=Lax${secure}`
+      : `${user.cookie}=; path=/; max-age=0; SameSite=Lax${secure}`;
+    sendValue({ nonce: `t-${Date.now().toString(36)}`, kind: "tokenSaved" });
+  }, [user?.token]);
+
+  const signOut = () => {
+    if (user?.cookie) document.cookie = `${user.cookie}=; path=/; max-age=0; SameSite=Lax`;
+    sendValue({ nonce: `o-${Date.now().toString(36)}`, kind: "logout" });
+  };
+
   const screenRunning = running?.kind === "screen";
   const btRunning = running?.kind === "backtest";
 
@@ -72,6 +88,16 @@ export default function App() {
           Relative strength against the Nifty 50 (the S&amp;P 500 for the Nasdaq 100), from month-end closes. Prices from Yahoo
           Finance.
         </p>
+        {user && (
+          <div className="account">
+            <span>
+              Signed in as <strong>{user.name}</strong>
+            </span>
+            <button type="button" className="link-btn" onClick={signOut}>
+              Sign out
+            </button>
+          </div>
+        )}
       </header>
 
       {!args ? (
