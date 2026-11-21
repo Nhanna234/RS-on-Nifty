@@ -169,10 +169,11 @@ def parse_symbols(text) -> set[str]:
     out = set()
     for x in items:
         x = str(x).strip().upper()
-        if x.startswith("NSE:"):
-            x = x[4:]
+        if ":" in x:                       # NSE:TCS, NASDAQ:AAPL
+            x = x.split(":", 1)[1]
         if x.endswith(".NS"):
             x = x[:-3]
+        x = x.replace(".", "-")            # US class shares in Yahoo form: BRK.B -> BRK-B
         if x:
             out.add(x)
     return out
@@ -213,3 +214,36 @@ def classify(symbols: list[str], names: dict, sectors: dict, cache: BasicIndustr
                 kept.append(row)
     return {"excluded": excluded, "kept": kept, "nseStatus": status, "byRule": by_rule,
             "checked": len(fin), "labels": list(LENDING_LABELS)}
+
+
+# ════════════════════════════════════════════════════════════ US universes
+# For US stocks the industry in the stock list decides (ICB subsector from the Nasdaq-100 table, or
+# whatever industry column an uploaded list has). The Nasdaq-100 rules already leave out financial
+# companies, so for that index this normally removes nothing.
+US_LENDING_WORDS = re.compile(r"\bbanks?\b|banking|consumer lending|consumer finance|mortgage|thrift|"
+                              r"savings institution|specialty finance|commercial finance|credit services", re.I)
+US_LENDING_DEFINITION = ("Lending means the stock list's industry is a bank, a consumer or commercial lender, a "
+                         "mortgage lender or mortgage REIT, or a savings institution. Insurers, asset managers, "
+                         "exchanges and payment companies stay in. The Nasdaq-100 itself has no financial companies.")
+
+
+def is_us_lender(industry: str | None) -> bool:
+    return bool(industry) and bool(US_LENDING_WORDS.search(str(industry)))
+
+
+def classify_us(symbols: list[str], names: dict, industries: dict, always=None, never=None) -> dict:
+    """Same output as classify(), for US stocks: industries = {symbol: 'Industry / Subsector' text}."""
+    always, never = parse_symbols(always), parse_symbols(never)
+    excluded, kept = [], []
+    for s in sorted(set(symbols)):
+        label = industries.get(s, "") or ""
+        row = {"symbol": s, "name": names.get(s, ""), "label": label or "Not classified"}
+        if s in never:
+            if is_us_lender(label):
+                kept.append({**row, "source": "your never-exclude list"})
+        elif s in always:
+            excluded.append({**row, "source": "your always-exclude list"})
+        elif is_us_lender(label):
+            excluded.append({**row, "source": "industry in the stock list"})
+    return {"excluded": excluded, "kept": kept, "nseStatus": "ok", "byRule": 0, "checked": len(set(symbols)),
+            "labels": [], "market": "US", "definition": US_LENDING_DEFINITION}

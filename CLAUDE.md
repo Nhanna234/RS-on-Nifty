@@ -4,7 +4,7 @@ This is Ali's RS Leaderboard app ("Abu Abdullah"): a Streamlit app (`app.py`) wi
 
 ## Rules document: keep it current
 
-`RULES.md` is the written rulebook of the screener and the backtest, and the app's **Rules** tab displays it. Whenever you change any logic, filter, default or data handling (in `app.py`, `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py` or `settings.py`):
+`RULES.md` is the written rulebook of the screener and the backtest, and the app's **Rules** tab displays it. Whenever you change any logic, filter, default or data handling (in `app.py`, `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py`, `us_universe.py` or `settings.py`):
 
 1. Update the relevant section of `RULES.md` so it describes what the code now does.
 2. Add a dated entry at the top of the **Change log** in `RULES.md`, in plain language.
@@ -14,6 +14,7 @@ Adjustable values belong in `settings.py` (or a named constant in the module tha
 
 ## Other notes
 
+- `data/nasdaq100.csv` is the fallback Nasdaq-100 list used when Nasdaq and Wikipedia do not answer; refresh it (and `SNAPSHOT_DATE` in `us_universe.py`) after an index change.
 - After changing `frontend/src`, run `cd frontend && npm install && npm run build` and commit `frontend/dist`.
-- `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py`, `settings.py` and `rules_doc.py` have no Streamlit imports and can be tested on their own.
+- `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py`, `us_universe.py`, `settings.py` and `rules_doc.py` have no Streamlit imports and can be tested on their own.
 - Ali is new to coding: explain changes in plain language.

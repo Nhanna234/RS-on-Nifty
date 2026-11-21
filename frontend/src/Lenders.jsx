@@ -75,7 +75,9 @@ export function LenderNote({ lenders }) {
   const kept = lenders.kept || [];
   const byRule = lenders.byRule || 0;
   const status =
-    lenders.nseStatus === "ok"
+    lenders.market === "US"
+      ? "using the industry in the stock list"
+      : lenders.nseStatus === "ok"
       ? "using NSE's industry classification"
       : lenders.nseStatus === "partial"
       ? `NSE's classification for most; ${byRule} decided by name rules because NSE did not answer for them`
@@ -86,9 +88,8 @@ export function LenderNote({ lenders }) {
         {ex.length} lending {ex.length === 1 ? "company" : "companies"} left out, {status}
       </summary>
       <p className="lender-def">
-        Lending means NSE's basic industry is a bank (public, private, small finance, payment or foreign), an NBFC, a
-        housing finance company or a financial institution. Insurers, fund houses, brokers, exchanges, depositories and
-        holding companies stay in.
+        {lenders.definition ||
+          "Lending means NSE's basic industry is a bank (public, private, small finance, payment or foreign), an NBFC, a housing finance company or a financial institution. Insurers, fund houses, brokers, exchanges, depositories and holding companies stay in."}
       </p>
       <div className="lender-cols">
         <div>
@@ -96,7 +97,9 @@ export function LenderNote({ lenders }) {
           <LenderTable rows={ex} />
         </div>
         <div>
-          <h4>Other financial companies kept ({kept.length})</h4>
+          <h4>
+            {lenders.market === "US" ? "Kept by your never-exclude list" : "Other financial companies kept"} ({kept.length})
+          </h4>
           <LenderTable rows={kept} />
         </div>
       </div>

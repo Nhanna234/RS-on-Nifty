@@ -6,9 +6,14 @@ Adapted from the EMA-Reclaim app's data.py.
                  store on disk. Every index shares the same downloads and a refresh only
                  fetches the last few days. If Yahoo re-adjusts history (new split or
                  dividend) the symbol is downloaded again.
-* RS index     : Nifty 50 price index (^NSEI) from Yahoo, the same series the screener uses.
+* RS index     : Nifty 50 price index (^NSEI) from Yahoo, the same series the screener uses;
+                 the S&P 500 (^GSPC) for US universes.
 * Benchmark    : Nifty 50 Total Return Index from niftyindices.com; the Nifty 50 price
                  index (niftyindices, then Yahoo) if the TRI cannot be fetched.
+                 US universes: S&P 500 Total Return Index (^SP500TR), else the S&P 500 price index.
+
+Markets: "IN" (NSE, Indian time) and "US" (Nasdaq, New York time). Every clock function takes
+the market, because a US trading day ends at a different moment from an Indian one.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -33,7 +39,11 @@ DATA_START = "2010-01-01"           # earliest daily data kept; backtests can st
 EARLIEST_START = "2012-01"
 FIELDS = ("Open", "High", "Low", "Close")
 SESSION_CUTOFF_IST = (17, 0)        # after 5 pm IST the day's prices count as final
+SESSION_CUTOFF_US = (20, 0)         # US stocks: after 8 pm New York time (about 6:30 am IST next day)
 REFETCH_MINUTES = 20                # a stock missing the latest close is asked again after this long
+MARKET_CLOCK = {"IN": (IST, SESSION_CUTOFF_IST), "US": (ZoneInfo("America/New_York"), SESSION_CUTOFF_US)}
+US_BENCH_TRI = "^SP500TR"           # S&P 500 Total Return Index on Yahoo
+US_BENCH_PRICE = "^GSPC"            # S&P 500 price index on Yahoo (fallback benchmark, and the US RS index)
 
 
 # ════════════════════════════════════════════════════════════════════ time
@@ -42,40 +52,54 @@ def now_ist() -> datetime:
     return datetime.now(IST)
 
 
-def last_cutoff(now: datetime | None = None) -> datetime:
-    """Most recent weekday 5 pm IST that has passed; prices fetched before it are stale."""
-    now = (now or now_ist()).astimezone(IST)
+def market_now(market: str = "IN", now: datetime | None = None) -> datetime:
+    """The time now on the market's own clock (IST for India, New York time for the US)."""
+    return (now or now_ist()).astimezone(MARKET_CLOCK[market][0])
+
+
+def last_cutoff(now: datetime | None = None, market: str = "IN") -> datetime:
+    """Most recent weekday cutoff that has passed (5 pm IST in India, 8 pm New York time in the US);
+    prices fetched before it are stale."""
+    tz, cut = MARKET_CLOCK[market]
+    now = market_now(market, now)
     d = now.date()
-    if (now.hour, now.minute) < SESSION_CUTOFF_IST:
+    if (now.hour, now.minute) < cut:
         d -= timedelta(days=1)
     while d.weekday() >= 5:
         d -= timedelta(days=1)
-    return datetime(d.year, d.month, d.day, *SESSION_CUTOFF_IST, tzinfo=IST)
+    return datetime(d.year, d.month, d.day, *cut, tzinfo=tz)
 
 
-def last_completed_month(now: datetime | None = None) -> pd.Period:
-    """The current month once 5 pm IST has passed on its last weekday (no trading day is left in it);
-    otherwise the previous month. A month that ends on a market holiday completes a day late here,
-    which is safe."""
-    now = (now or now_ist()).astimezone(IST)
+def last_completed_month(now: datetime | None = None, market: str = "IN") -> pd.Period:
+    """The current month once the cutoff has passed on its last weekday (no trading day is left in it);
+    otherwise the previous month. Dates and times are on the market's own clock. A month that ends on
+    a market holiday completes a day late here, which is safe."""
+    cut = MARKET_CLOCK[market][1]
+    now = market_now(market, now)
     p = pd.Period(now.date(), "M")
     last_weekday = p.end_time.normalize()
     while last_weekday.weekday() >= 5:
         last_weekday -= pd.Timedelta(days=1)
     today = pd.Timestamp(now.date())
-    if today > last_weekday or (today == last_weekday and (now.hour, now.minute) >= SESSION_CUTOFF_IST):
+    if today > last_weekday or (today == last_weekday and (now.hour, now.minute) >= cut):
         return p
     return p - 1
 
 
-def last_session_date(now: datetime | None = None):
+def running_month(now: datetime | None = None, market: str = "IN") -> pd.Period:
+    """The calendar month on the market's own clock."""
+    return pd.Period(market_now(market, now).date(), "M")
+
+
+def last_session_date(now: datetime | None = None, market: str = "IN"):
     """The most recent weekday whose closing prices should be available (market holidays aside)."""
-    return last_cutoff(now).date()
+    return last_cutoff(now, market).date()
 
 
 # ═══════════════════════════════════════════════════════════════ prices
 def _clean(s) -> str:
-    return str(s).strip().upper().replace(".NS", "")
+    s = str(s).strip().upper()
+    return s[:-3] if s.endswith(".NS") else s
 
 
 def _yf_download(tickers: list[str], start: str) -> dict[str, pd.DataFrame]:
@@ -104,7 +128,10 @@ def _yf_download(tickers: list[str], start: str) -> dict[str, pd.DataFrame]:
 class PriceStore:
     """Per-symbol daily OHLC cache (memory + disk), shared by every index and every user."""
 
-    def __init__(self, cache_dir: str, downloader=None, batch: int = 50, pause: float = 1.0):
+    def __init__(self, cache_dir: str, downloader=None, batch: int = 50, pause: float = 1.0,
+                 suffix: str = ".NS"):
+        """suffix: added to each symbol for Yahoo (".NS" for NSE stocks, "" for US stocks)."""
+        self.suffix = suffix
         self.dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
         self.lock = threading.Lock()
@@ -166,7 +193,7 @@ class PriceStore:
             chunk = syms[i:i + self.batch]
             for attempt in range(3):
                 try:
-                    got.update(self.downloader([f"{s}.NS" for s in chunk], start))
+                    got.update(self.downloader([f"{s}{self.suffix}" for s in chunk], start))
                     break
                 except Exception:  # noqa: BLE001
                     time.sleep(self.pause * (attempt + 2))
@@ -178,7 +205,7 @@ class PriceStore:
             time.sleep(self.pause * 3)
             for i in range(0, len(missing), 20):
                 try:
-                    got.update(self.downloader([f"{s}.NS" for s in missing[i:i + 20]], start))
+                    got.update(self.downloader([f"{s}{self.suffix}" for s in missing[i:i + 20]], start))
                 except Exception:  # noqa: BLE001
                     pass
                 time.sleep(self.pause)
@@ -329,13 +356,22 @@ def monthly_last(ser: pd.Series) -> pd.Series:
     return ser.groupby(ser.index.to_period("M")).last()
 
 
-def rs_index_monthly(start: date, end: date) -> pd.Series:
-    """Nifty 50 price index month-end closes: the denominator of relative strength."""
-    return monthly_last(fetch_index_yahoo("^NSEI", start, end))
+def rs_index_monthly(start: date, end: date, ticker: str = "^NSEI") -> pd.Series:
+    """Month-end closes of the RS index (Nifty 50, or the S&P 500 for US universes): the denominator
+    of relative strength."""
+    return monthly_last(fetch_index_yahoo(ticker, start, end))
 
 
-def benchmark_monthly(start: date, end: date) -> tuple[pd.Series, str]:
-    """Nifty 50 TRI month-end values, with the price index as fallback."""
+def benchmark_monthly(start: date, end: date, market: str = "IN") -> tuple[pd.Series, str]:
+    """Nifty 50 TRI month-end values, with the price index as fallback. US: the S&P 500 TRI, with the
+    S&P 500 price index as fallback."""
+    if market == "US":
+        try:
+            return monthly_last(fetch_index_yahoo(US_BENCH_TRI, start, end)), \
+                "S&P 500 Total Return Index (Yahoo)"
+        except Exception:  # noqa: BLE001
+            return monthly_last(fetch_index_yahoo(US_BENCH_PRICE, start, end)), \
+                "S&P 500 price index (Yahoo); TRI unavailable, so dividends are not included"
     errs = []
     for kind, label in (("TRI", "Nifty 50 Total Return Index (niftyindices.com)"),
                         ("PRICE", "Nifty 50 price index (niftyindices.com); TRI unavailable")):

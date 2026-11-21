@@ -68,7 +68,10 @@ export default function App() {
             Rules
           </button>
         </nav>
-        <p className="masthead-note">Relative strength against the Nifty 50, from month-end closes. Prices from Yahoo Finance.</p>
+        <p className="masthead-note">
+          Relative strength against the Nifty 50 (the S&amp;P 500 for the Nasdaq 100), from month-end closes. Prices from Yahoo
+          Finance.
+        </p>
       </header>
 
       {!args ? (
@@ -116,6 +119,7 @@ function Controls({ indices, defaults, running, onRun }) {
   const fileInput = useRef(null);
   const set = (key) => (e) =>
     setS((prev) => ({ ...prev, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  const isUS = (defaults.indexMarkets || {})[s.index] === "US";
 
   const pickFiles = async (e) => {
     const picked = await Promise.all([...e.target.files].map(async (f) => ({ name: f.name, text: await f.text() })));
@@ -166,13 +170,14 @@ function Controls({ indices, defaults, running, onRun }) {
         )}
         <span className="hint">
           {files.length ? (
-            "Your list is used instead of the index."
+            `Your list is used instead of the index, read as ${isUS ? "US" : "NSE"} stocks.`
           ) : (
             <>
               or{" "}
               <button type="button" className="link-btn" onClick={() => fileInput.current.click()}>
                 use your own CSV
               </button>
+              {isUS ? ". RS against the S&P 500." : ""}
             </>
           )}
         </span>
@@ -224,10 +229,11 @@ function Welcome() {
   return (
     <section className="hero">
       <div className="hero-text">
-        <h2 className="hero-title">Which stocks are at a 12-month high against the Nifty 50?</h2>
+        <h2 className="hero-title">Which stocks are at a 12-month high against the market?</h2>
         <p className="hero-sub">
-          Relative strength is a stock's price divided by the Nifty 50. Each month, this screen compares it with its
-          highest month-end value of the past 12 months. Pick a universe above and run the screen.
+          Relative strength is a stock's price divided by the Nifty 50 (by the S&amp;P 500 for Nasdaq 100 stocks). Each
+          month, this screen compares it with its highest month-end value of the past 12 months. Pick a universe above and
+          run the screen.
         </p>
       </div>
       <div className="hero-side">
@@ -319,7 +325,7 @@ function Results({ result, dimmed }) {
   const showWeekly = stocks.some((s) => s.weeklyCR);
 
   const copySymbols = async () => {
-    const ok = await copyText(visible.map((s) => `NSE:${s.symbol}`).join(", "));
+    const ok = await copyText(visible.map((s) => s.tv || `NSE:${s.symbol}`).join(", "));
     setCopied(ok ? "done" : "failed");
     setTimeout(() => setCopied(false), 2200);
   };
@@ -381,7 +387,8 @@ function Results({ result, dimmed }) {
       </section>
 
       <p className="provenance">
-        {universe.name} ({universe.source}), {universe.count} stocks. Run at {result.asOf}.
+        {universe.name} ({universe.source}), {universe.count} stocks. Relative strength against the{" "}
+        {result.market?.rsIndex || "Nifty 50"}. Run at {result.asOf}.
       </p>
       <LenderNote lenders={result.lenders} />
 
@@ -444,6 +451,7 @@ function Results({ result, dimmed }) {
             grouped={sort === "sector"}
             inProgress={result.monthInProgress}
             showWeekly={showWeekly}
+            currency={result.market?.currency}
             openSymbol={openSymbol}
             onToggle={(sym) => setOpenSymbol((cur) => (cur === sym ? null : sym))}
           />
@@ -549,7 +557,7 @@ function SectorPanel({ sectors, active, onPick, total }) {
 }
 
 /* ---------- the RS matrix ---------- */
-function Matrix({ rows, months, grouped, inProgress, showWeekly, openSymbol, onToggle }) {
+function Matrix({ rows, months, grouped, inProgress, showWeekly, currency, openSymbol, onToggle }) {
   const span = 1 + months.length + 4 + (showWeekly ? 3 : 0);
   const body = [];
   let lastSector = null;
@@ -623,7 +631,7 @@ function Matrix({ rows, months, grouped, inProgress, showWeekly, openSymbol, onT
       body.push(
         <tr className="detail-row" key={`d-${s.symbol}`}>
           <td colSpan={span}>
-            <Detail stock={s} months={months} />
+            <Detail stock={s} months={months} currency={currency} />
           </td>
         </tr>
       );
@@ -696,14 +704,17 @@ function Spark({ values }) {
 }
 
 /* ---------- one stock, opened ---------- */
-function Detail({ stock, months }) {
+function Detail({ stock, months, currency }) {
   return (
     <div className="detail">
       <RSChart trail={stock.trail} />
       <dl className="detail-facts">
         <div>
           <dt>Last price</dt>
-          <dd>₹{num(stock.price, 2)}</dd>
+          <dd>
+            {currency === "USD" ? "$" : "₹"}
+            {num(stock.price, 2)}
+          </dd>
         </div>
         <div>
           <dt>Above its 12-month EMA</dt>
@@ -727,7 +738,7 @@ function Detail({ stock, months }) {
         )}
         <a
           className="tv-link"
-          href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`NSE:${stock.symbol}`)}`}
+          href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(stock.tv || `NSE:${stock.symbol}`)}`}
           target="_blank"
           rel="noopener noreferrer"
         >

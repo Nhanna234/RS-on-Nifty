@@ -3,7 +3,7 @@ RS-high rotation backtest (no Streamlit imports, so it can be tested on its own)
 
 Rules (decided at each month-end close, traded at the next month's first open):
 
-RS ratio  : relative strength (stock / Nifty 50) as a fraction of its highest month-end value
+RS ratio  : relative strength (stock / RS index: Nifty 50, or S&P 500 for US) as a fraction of its highest month-end value
             in the past 12 months (the current month included), the same measure as the screener.
 ENTRY     : RS ratio = 100%, or RS ratio >= the minimum threshold and higher than 2 months ago;
             and close >= 12-month EMA (if switched on), month closing range >= minimum,
@@ -488,7 +488,7 @@ def to_excel(report: dict, settings_rows: list[tuple]) -> bytes:
                  ("Volatility (annual)", "vol"), ("Sharpe ratio", "sharpe"), ("Best month", "best"),
                  ("Worst month", "worst")]
         summary = pd.DataFrame([(n, s.get(k), b.get(k)) for n, k in names],
-                               columns=["Measure", "Strategy", "Nifty 50 benchmark"])
+                               columns=["Measure", "Strategy", "Benchmark"])
         summary.to_excel(xw, sheet_name="Summary", index=False)
         pd.DataFrame(settings_rows, columns=["Setting", "Value"]).to_excel(
             xw, sheet_name="Summary", index=False, startrow=len(summary) + 3)

@@ -23,7 +23,7 @@ jobs:
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         run: |
           changed=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
-          logic=$(echo "$changed" | grep -E '^(app|bt_engine|bt_data|lender_filter|compare|settings)\.py$' || true)
+          logic=$(echo "$changed" | grep -E '^(app|bt_engine|bt_data|lender_filter|compare|us_universe|settings)\.py$' || true)
           if [ -n "$logic" ] && ! echo "$changed" | grep -qx 'RULES.md'; then
             echo "::warning title=RULES.md not updated::Strategy code changed ($(echo $logic | tr '\n' ' ')) but RULES.md did not. If the logic changed, update RULES.md and its change log."
           fi

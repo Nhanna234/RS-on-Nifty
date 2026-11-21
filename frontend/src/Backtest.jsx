@@ -7,18 +7,40 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 /* ---------- formatting ---------- */
 const pct = (v, d = 1) => (v == null ? "–" : `${num(v * 100, d)}%`);
 const spct = (v, d = 1) => (v == null ? "–" : `${v > 0 ? "+" : ""}${num(v * 100, d)}%`);
-const rupees = (v) => (v == null ? "–" : `₹${Math.round(v).toLocaleString("en-IN")}`);
+/* Money is shown in the currency of the result on screen: rupees for Indian universes, dollars for US ones.
+   Backtest() sets these two from the result before anything below renders. */
+let CURRENCY = "INR";
+let TV_PREFIX = "NSE";
+const curSym = (c = CURRENCY) => (c === "USD" ? "$" : "₹");
+const curLocale = () => (CURRENCY === "USD" ? "en-US" : "en-IN");
+const rupees = (v) => (v == null ? "–" : `${curSym()}${Math.round(v).toLocaleString(curLocale())}`);
 function rupeesShort(v) {
   if (v == null) return "–";
+  if (CURRENCY === "USD") {
+    if (Math.abs(v) >= 1e6) return `$${num(v / 1e6, 2)} million`;
+    return rupees(v);
+  }
   if (Math.abs(v) >= 1e7) return `₹${num(v / 1e7, 2)} crore`;
   if (Math.abs(v) >= 1e5) return `₹${num(v / 1e5, 1)} lakh`;
   return rupees(v);
 }
 function axisRupees(v) {
-  const short = (x) => (x >= 100 ? Math.round(x).toLocaleString("en-IN") : num(x, x >= 10 ? 0 : 1));
+  const short = (x) => (x >= 100 ? Math.round(x).toLocaleString(curLocale()) : num(x, x >= 10 ? 0 : 1));
+  if (CURRENCY === "USD") {
+    if (v >= 1e6) return `$${short(v / 1e6)}M`;
+    if (v >= 1e4) return `$${short(v / 1e3)}K`;
+    return `$${Math.round(v).toLocaleString("en-US")}`;
+  }
   if (v >= 1e7) return `₹${short(v / 1e7)} Cr`;
   if (v >= 1e5) return `₹${short(v / 1e5)} L`;
   return `₹${Math.round(v).toLocaleString("en-IN")}`;
+}
+const tvSymbol = (sym) => (TV_PREFIX ? `${TV_PREFIX}:${sym}` : sym);
+function benchShortName(source) {
+  if (source.startsWith("Nifty 50 Total")) return "Nifty 50 TRI";
+  if (source.startsWith("S&P 500 Total")) return "S&P 500 TRI";
+  if (source.startsWith("S&P 500")) return "S&P 500";
+  return "Nifty 50";
 }
 const monthKeyLabel = (key) => {
   const [y, m] = String(key).split("-");
@@ -27,6 +49,8 @@ const monthKeyLabel = (key) => {
 
 /* ---------- page ---------- */
 export default function Backtest({ indices, defaults, result, running, busy, onRun, cmpResult, cmpRunning, onCompare }) {
+  CURRENCY = result?.market?.currency || "INR";
+  TV_PREFIX = result?.market ? result.market.tvPrefix : "NSE";
   return (
     <>
       <BtControls indices={indices} defaults={defaults} running={running} busy={busy} onRun={onRun} onCompare={onCompare} cmpRunning={cmpRunning} />
@@ -70,8 +94,23 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
   const [files, setFiles] = useState([]);
   const [lend, setLend] = useLenderSettings(defaults.excludeLenders !== false);
   const fileInput = useRef(null);
+  const marketOf = (name) => (defaults.indexMarkets || {})[name] || "IN";
+  const marketInfo = (name) => (defaults.markets || {})[marketOf(name)] || { currency: "INR", capital: 1000000 };
   const set = (key) => (e) =>
     setS((prev) => ({ ...prev, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  // switching between an Indian and a US index switches the starting capital to that market's default
+  const setIndex = (e) => {
+    const name = e.target.value;
+    setS((prev) => {
+      if (marketOf(name) === marketOf(prev.index)) return { ...prev, index: name };
+      const m = marketInfo(name);
+      // a US month completes a few hours after an Indian one: keep the end month within the market's latest
+      const end = m.end && prev.end > m.end ? m.end : prev.end === endOf(prev.index) ? m.end || prev.end : prev.end;
+      return { ...prev, index: name, capital: m.capital, end };
+    });
+  };
+  const endOf = (name) => marketInfo(name).end || defaults.end;
+  const isUS = marketOf(s.index) === "US";
 
   const pickFiles = async (e) => {
     const picked = await Promise.all([...e.target.files].map(async (f) => ({ name: f.name, text: await f.text() })));
@@ -96,7 +135,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         ranking: s.ranking,
         cost: n(s.cost, 0, 5, 0.2),
         cashYield: n(s.cashYield, 0, 20, 6),
-        capital: n(s.capital, 1000, 1e12, 1e6),
+        capital: n(s.capital, 1000, 1e12, marketInfo(s.index).capital),
         ...lend,
       };
   };
@@ -117,7 +156,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
             </button>
           </div>
         ) : (
-          <select id="b-index" value={s.index} onChange={set("index")}>
+          <select id="b-index" value={s.index} onChange={setIndex}>
             {indices.map((name) => (
               <option key={name}>{name}</option>
             ))}
@@ -125,13 +164,14 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         )}
         <span className="hint">
           {files.length ? (
-            "Your list is used instead of the index."
+            `Your list is used instead of the index, read as ${isUS ? "US" : "NSE"} stocks.`
           ) : (
             <>
               or{" "}
               <button type="button" className="link-btn" onClick={() => fileInput.current.click()}>
                 use your own CSV
               </button>
+              {isUS ? `. RS against the ${marketInfo(s.index).rsIndex || "S&P 500"}, in dollars.` : ""}
             </>
           )}
         </span>
@@ -139,11 +179,11 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
       </div>
       <div className="field">
         <label htmlFor="b-start">Start month</label>
-        <input id="b-start" type="month" min={defaults.earliest} max={defaults.end} value={s.start} onChange={set("start")} required />
+        <input id="b-start" type="month" min={defaults.earliest} max={endOf(s.index)} value={s.start} onChange={set("start")} required />
       </div>
       <div className="field">
         <label htmlFor="b-end">End month</label>
-        <input id="b-end" type="month" min={defaults.earliest} max={defaults.end} value={s.end} onChange={set("end")} required />
+        <input id="b-end" type="month" min={defaults.earliest} max={endOf(s.index)} value={s.end} onChange={set("end")} required />
       </div>
       <div className="field">
         <label htmlFor="b-slots">Stocks held</label>
@@ -181,7 +221,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         <input id="b-cash" type="number" min="0" max="20" step="0.5" value={s.cashYield} onChange={set("cashYield")} />
       </div>
       <div className="field">
-        <label htmlFor="b-cap">Starting capital ₹</label>
+        <label htmlFor="b-cap">Starting capital {curSym(marketInfo(s.index).currency)}</label>
         <input id="b-cap" type="number" min="1000" step="1000" value={s.capital} onChange={set("capital")} />
       </div>
       <div className="field field-switches">
@@ -201,7 +241,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
           type="button"
           disabled={busy}
           onClick={() => onCompare(settings())}
-          title="Same settings, all ten indices, your period and since Jan 2015, in one Excel file"
+          title="Same settings, all ten Nifty indices (not the Nasdaq 100), your period and since Jan 2015, in one Excel file"
         >
           {cmpRunning ? "Comparing…" : "Compare all indices"}
         </button>
@@ -232,7 +272,7 @@ function BtIntro({ defaults }) {
           </div>
           <div>
             <dt>Compared with</dt>
-            <dd>Nifty 50 Total Return Index</dd>
+            <dd>Nifty 50 Total Return Index (S&amp;P 500 Total Return Index for the Nasdaq 100)</dd>
           </div>
         </dl>
       </div>
@@ -317,7 +357,7 @@ function BtResults({ result, dimmed }) {
 
   const s = r.strategy;
   const b = r.benchmark;
-  const benchShort = result.benchmarkSource.startsWith("Nifty 50 Total") ? "Nifty 50 TRI" : "Nifty 50";
+  const benchShort = benchShortName(result.benchmarkSource);
   const beat = b && s.cagr != null && b.cagr != null ? s.cagr - b.cagr : null;
 
   const downloadExcel = () => {
@@ -471,6 +511,19 @@ function Caveats({ result }) {
           or left the index since then are missing, so the results are better than a real investor would have got, more so
           for small and micro caps.
         </li>
+        {result.market?.code === "US" && (
+          <li>
+            <strong>For the Nasdaq 100 the bias is large.</strong> Nasdaq rebuilds the index every December, and today's list
+            holds the companies that grew big enough to join it. Testing today's members over past years buys yesterday's
+            future winners with hindsight, so treat long US backtests as an upper bound.
+          </li>
+        )}
+        {result.market?.code === "US" && (
+          <li>
+            Results are in US dollars. For an investor in India the rupee's move against the dollar, remittance costs and
+            Indian tax on foreign shares change the outcome; none of them is modelled.
+          </li>
+        )}
         <li>
           Prices are Yahoo Finance daily data, adjusted for splits and dividends, with {result.data.spikesRemoved} one-day
           bad prices removed. Other data errors in small and micro caps are not caught.
@@ -1008,7 +1061,7 @@ function Orders({ o, rankingLabel }) {
   const buySyms = (mode === "fresh" ? f.buys : c.buys).map((x) => x.symbol);
 
   const copy = async () => {
-    const ok = await copyText(buySyms.map((x) => `NSE:${x}`).join(", "));
+    const ok = await copyText(buySyms.map(tvSymbol).join(", "));
     setCopied(ok ? "Copied" : "Copy was blocked by the browser");
     setTimeout(() => setCopied(false), 2200);
   };
@@ -1295,7 +1348,7 @@ function TradeLog({ trades, onExcel }) {
               {head("exitIdx", "Sold")}
               {head("months", "Months", "num")}
               {head("ret", "Return", "num")}
-              {head("pnl", "Profit ₹", "num")}
+              {head("pnl", `Profit ${curSym()}`, "num")}
               {head("reason", "Why sold")}
             </tr>
           </thead>

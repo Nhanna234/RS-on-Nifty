@@ -10,7 +10,7 @@ Rules describe what the code does. **Guidelines** (section 8) are recommendation
 
 ## 1. Stock universe
 
-**1.1 Index lists.** Each run starts from one of ten Nifty indices (see Parameters). The list of member stocks is downloaded from NSE Indices' official constituent files, trying niftyindices.com and then nsearchives.nseindia.com. Only stocks in the EQ, BE and BZ series are kept. Lists are kept for 24 hours.
+**1.1 Index lists.** Each run starts from one of eleven universes: ten Nifty indices and the Nasdaq 100 (see Parameters and 1.5). The list of member stocks is downloaded from NSE Indices' official constituent files, trying niftyindices.com and then nsearchives.nseindia.com. Only stocks in the EQ, BE and BZ series are kept. Lists are kept for 24 hours.
 
 **1.2 If an index file cannot be downloaded.** Two indices are rebuilt from others, using NSE's own definitions:
 - Nifty Total Market = Nifty 500 + Nifty Microcap 250.
@@ -19,6 +19,7 @@ Rules describe what the code does. **Guidelines** (section 8) are recommendation
 Any other index that fails to download stops the run with a message.
 
 **1.3 Your own list.** An uploaded CSV replaces the index completely. It needs a `Symbols` (or `Symbol`) column; `Sector` (or `Industry`) and `ISIN` (or `ISIN Code`) are optional. Symbols written as `NSE:TCS`, `TCS.NS` or `tcs` are all read as `TCS`. In the backtest's "Compare all indices", uploaded lists are not used.
+- The list is read as stocks of the market of the index selected next to it: with an Indian index selected it is a list of NSE stocks; with the Nasdaq 100 selected it is a list of US stocks (symbols such as `AAPL`, `NASDAQ:AAPL` or `brk.b`, read as `AAPL` and `BRK-B`), measured against the S&P 500 and shown in dollars.
 
 **1.4 Lending companies (switch, on by default).** When the switch is on, lenders are removed from the universe before anything else happens.
 - A company is a lender when NSE Indices' **Basic Industry** (the most detailed level of NSE's industry classification, which describes the company's core business) is Public Sector Bank, Private Sector Bank, Other Bank (small finance, payment and foreign banks), Non Banking Financial Company (NBFC), Housing Finance Company or Financial Institution.
@@ -27,12 +28,21 @@ Any other index that fails to download stops the run with a message.
 - If NSE does not answer, these fallback rules decide instead, and the results say so: "Bank" in the company name; membership of NSE's Nifty NBFC index; housing-finance or lending words in the company name (excluding names with insurance, asset management, holding, exchange, depository, registrar, broking or securities); a short list of government financial institutions (see Parameters).
 - Your **Always exclude** and **Never exclude** symbol lists override everything above. They are remembered in your browser.
 - Every run lists the companies left out and the other financial companies kept, with the source of each decision.
+- For US stocks the industry in the stock list decides instead (for the Nasdaq 100, its ICB industry and subsector): a stock is a lender when that industry names a bank, a consumer or commercial lender, a mortgage lender or mortgage REIT, or a savings institution. The Nasdaq-100's own rules already leave out financial companies, so for that index the filter normally removes nothing; it matters for an uploaded US list. The Always and Never exclude lists work the same way.
+
+**1.5 Nasdaq 100 (US stocks).** The member list comes from Nasdaq's own website (the index operator). Each stock's industry comes from Wikipedia's Nasdaq-100 table (ICB industry and subsector). If Nasdaq does not answer, Wikipedia's table is used as the list; if neither answers, a snapshot saved in the repository (`data/nasdaq100.csv`, dated in Parameters) is used. The results say which source was used. Symbols are kept in Yahoo Finance's form (a class letter after a dot becomes a dash, `BRK.B` becomes `BRK-B`). For this universe everything that depends on the market changes together:
+- relative strength is measured against the **S&P 500** price index instead of the Nifty 50 (2.1);
+- the backtest benchmark is the **S&P 500 Total Return Index**, or the S&P 500 price index if that cannot be fetched (4.10);
+- a day's prices count as final from **8 pm New York time** (about 6:30 am IST the next day, 5:30 am during US summer time), and a month is complete from that moment on its last weekday (2.7);
+- money is in **US dollars**, with a default starting capital of $10,000; the order panel's quantities are whole US shares;
+- Indian and US prices are stored separately, so a symbol that exists on both markets is never mixed up.
+All other rules (sections 2 to 5 and 7) are the same as for the Nifty indices.
 
 ---
 
 ## 2. Definitions used everywhere
 
-**2.1 Relative strength (RS).** A stock's month-end closing price divided by the Nifty 50 price index's month-end close. Stock prices are adjusted for splits and dividends; the Nifty 50 price index is not, which slightly favours high-dividend stocks.
+**2.1 Relative strength (RS).** A stock's month-end closing price divided by the Nifty 50 price index's month-end close (for the Nasdaq 100 and US lists: the S&P 500 price index's). Stock prices are adjusted for splits and dividends; the index is not, which slightly favours high-dividend stocks.
 
 **2.2 RS ratio ("RS of high", shown as a percentage).** This month's RS divided by the highest month-end RS of the last 12 months, the current month included. 100% means RS is at a new 12-month high; 97% means it is 3% below its 12-month high.
 - The screener needs at least 13 month-ends of history for a stock (the current one plus 12 before it); the backtest needs 12. This only matters for recently listed stocks.
@@ -45,7 +55,7 @@ Any other index that fails to download stops the run with a message.
 
 **2.6 Month labels.** In the backtest, a month means the month the stocks were **held**. "Oct 2026" is the portfolio chosen at the September close, bought at October's first open and valued at the October close.
 
-**2.7 When a month is complete.** A month counts as complete from 5 pm IST on its last weekday. Before that, its numbers are provisional. A month whose last weekday is a market holiday completes a day late, which is safe.
+**2.7 When a month is complete.** A month counts as complete from 5 pm IST on its last weekday (US stocks: from 8 pm New York time on its last weekday). Before that, its numbers are provisional. A month whose last weekday is a market holiday completes a day late, which is safe. Because the US closes later, for a few hours after an Indian month-end the latest completed month of a US universe is still the month before; the end month is moved back if needed, and the results say so.
 
 ---
 
@@ -115,7 +125,7 @@ A held stock is **never swapped** for a better candidate. It stays until a sell 
 
 **4.9 Trade records.** A trade's return includes the cost on both sides. Months held = sell month − buy month. Positions still open at the end are valued at the last close without a selling cost and marked "Still held".
 
-**4.10 Benchmark.** The Nifty 50 Total Return Index from niftyindices.com; if that is not available, the Nifty 50 price index (the report says which was used).
+**4.10 Benchmark.** The Nifty 50 Total Return Index from niftyindices.com; if that is not available, the Nifty 50 price index (the report says which was used). For the Nasdaq 100 and US lists: the S&P 500 Total Return Index from Yahoo Finance (`^SP500TR`), or the S&P 500 price index (`^GSPC`) if that is not available.
 
 **4.11 Path dependence.** Because held stocks are never swapped, the holdings in any month depend on the start month. Two backtests with different start months can hold different stocks in the same month.
 
@@ -134,7 +144,7 @@ A held stock is **never swapped** for a better candidate. It stays until a sell 
 
 ## 6. Compare all indices
 
-Runs the current backtest settings on all ten indices, for the chosen period and, if the chosen start is later, also from January 2015 to the same end. Each index is backtested on its own (ranking happens inside that index); the results equal single backtests of the same index. Each run is compared with the Nifty 50 and with the index's own value (its Total Return Index where available, otherwise its price index). Everything is written to one Excel workbook: summary, runs, settings, monthly values, trades and holdings.
+Runs the current backtest settings on all ten Nifty indices (the Nasdaq 100 is not included), for the chosen period and, if the chosen start is later, also from January 2015 to the same end. Each index is backtested on its own (ranking happens inside that index); the results equal single backtests of the same index. Each run is compared with the Nifty 50 and with the index's own value (its Total Return Index where available, otherwise its price index). Everything is written to one Excel workbook: summary, runs, settings, monthly values, trades and holdings.
 
 ---
 
@@ -166,12 +176,14 @@ These are recommendations for following the strategy with real money. The code d
 8. **Size for liquidity.** Keep each order a small fraction of the stock's average daily traded value, especially for small and micro caps.
 9. **Remember what the backtest leaves out:** taxes (short-term gains on listed shares are taxed at 20% plus cess for holdings up to 12 months), slippage beyond the cost setting, and survivorship bias (section 9).
 10. **Start small.** Until the live results match the model for a few months, use part of the capital or paper-trade.
+11. **Nasdaq 100.** Run the backtest after 8 pm New York time on the month's last US trading day (from about 6:30 am IST the next morning; 5:30 am during US summer time). The US market opens at 9:30 am New York time, which is 8 pm IST (7 pm during US summer time) on the first US trading day of the month. US market holidays differ from Indian ones. For an investor in India, buying US shares goes through the Liberalised Remittance Scheme, and foreign shares are taxed differently from Indian listed shares; check both before following the US results with real money. The default 6% cash yield is high for US dollars; set it to a realistic dollar rate.
 
 ---
 
 ## 9. Known limitations
 
-- **Survivorship bias.** Today's index members are used for every past month. Companies that collapsed or left the index are missing, which makes results look better than they were, most of all for small and micro caps.
+- **Survivorship bias.** Today's index members are used for every past month. Companies that collapsed or left the index are missing, which makes results look better than they were, most of all for small and micro caps. It is also large for the **Nasdaq 100**: the index is rebuilt every December, and today's list holds the companies that grew big enough to join it, so a long backtest on today's members picks past winners with hindsight.
+- **Currency.** Nasdaq 100 results are in US dollars. The rupee's move against the dollar, remittance costs and taxes on foreign shares are not modelled.
 - **Classification today.** The lending filter uses today's NSE classification for every past month.
 - **Data quality.** Yahoo Finance data for small and micro caps can have gaps or bad prices; only one-day reversals are removed.
 - **Month-end view.** Drawdowns and stops are only seen at month-ends; a stock can fall much further within a month.
@@ -203,9 +215,11 @@ The values the code uses. This section is generated from the code; the website a
 | Section | Parameter | Value | Defined in |
 |---|---|---|---|
 | Universes | Default universe (both tabs) | Nifty Total Market | settings.py `DEFAULT_INDEX` |
-| Universes | Indices offered | Nifty 50, Nifty 100, Nifty 200, Nifty LargeMidcap 250, Nifty Midcap 150, Nifty Smallcap 100, Nifty Smallcap 250, Nifty Microcap 250, Nifty 500, Nifty Total Market | settings.py `INDEX_FILES` |
+| Universes | Indices offered | Nifty 50, Nifty 100, Nifty 200, Nifty LargeMidcap 250, Nifty Midcap 150, Nifty Smallcap 100, Nifty Smallcap 250, Nifty Microcap 250, Nifty 500, Nifty Total Market, Nasdaq 100 | settings.py `INDEX_FILES`, `US_INDICES` |
+| Universes | Nasdaq 100 list | Nasdaq's website, then Wikipedia, then the saved snapshot of 20 Nov 2026 | us_universe.py `SNAPSHOT_DATE` |
 | Universes | Lending companies excluded by default | On | settings.py `SCREENER_DEFAULTS`, `BT_DEFAULTS` |
 | RS measure | Benchmark for relative strength | Nifty 50 price index (Yahoo `^NSEI`) | settings.py `RS_INDEX_TICKER` |
+| RS measure | Benchmark for relative strength, Nasdaq 100 and US lists | S&P 500 price index (Yahoo `^GSPC`) | settings.py `MARKETS` |
 | RS measure | Look-back for the RS high (screener / backtest) | 12 / 12 month-ends | settings.py `LOOKBACK_MONTHS`, bt_engine.py `LOOKBACK` |
 | RS measure | EMA length | 12 months | bt_engine.py `EMA_SPAN` |
 | Screener | Months shown | 6 | settings.py `SCREENER_DEFAULTS` |
@@ -230,14 +244,18 @@ The values the code uses. This section is generated from the code; the website a
 | Backtest | Cost per buy and per sell | 0.2% | settings.py `BT_DEFAULTS` |
 | Backtest | Yield on cash | 6% a year | settings.py `BT_DEFAULTS` |
 | Backtest | Starting capital | ₹1,000,000 | settings.py `BT_DEFAULTS` |
+| Backtest | Starting capital, Nasdaq 100 and US lists | $10,000 | settings.py `MARKETS` |
+| Backtest | Benchmark, Nasdaq 100 and US lists | S&P 500 Total Return Index (Yahoo `^SP500TR`), else the S&P 500 price index (`^GSPC`) | bt_data.py `US_BENCH_TRI`, `US_BENCH_PRICE` |
 | Backtest | Smallest buy allowed | 20% of one slot's money | bt_engine.py `MIN_ALLOC_FRAC` |
 | Data | Daily prices kept from | 2010-01-01 | bt_data.py `DATA_START` |
 | Data | Bad-price rule | a one-day move of 1.6× (or 1/1.6) that fully reverses the next day | bt_engine.py `SPIKE_FACTOR` |
 | Data | A day's prices count as final from | 17:00 IST | bt_data.py `SESSION_CUTOFF_IST` |
+| Data | A day's prices count as final from, US stocks | 20:00 New York time | bt_data.py `SESSION_CUTOFF_US` |
 | Data | Missing latest close asked again after | 20 minutes | bt_data.py `REFETCH_MINUTES` |
 | Lending filter | Basic industries treated as lending | Public Sector Bank, Private Sector Bank, Other Bank, Non Banking Financial Company (NBFC), Housing Finance Company, Financial Institution | lender_filter.py `LENDING_LABELS` |
 | Lending filter | Fallback list of financial institutions | HUDCO, IFCI, IREDA, IRFC, PFC, RECLTD | lender_filter.py `KNOWN_FIS` |
 | Lending filter | NSE classification kept for | 30 days | lender_filter.py `CACHE_DAYS` |
+| Lending filter | US stocks: industry words treated as lending | bank(s), banking, consumer lending, consumer finance, mortgage, thrift, savings institution, specialty finance, commercial finance, credit services | lender_filter.py `US_LENDING_WORDS` |
 | Comparison | Universes compared | Nifty Total Market, Nifty 500, Nifty 50, Nifty 100, Nifty 200, Nifty LargeMidcap 250, Nifty Midcap 150, Nifty Smallcap 100, Nifty Smallcap 250, Nifty Microcap 250 | settings.py `COMPARE_ORDER` |
 | Comparison | Long period starts | 2015-01 | settings.py `LONG_START` |
 <!-- parameters:end -->
@@ -245,6 +263,12 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 12. Change log
+
+**21 Nov 2026**
+- Added the **Nasdaq 100** universe (section 1.5). For it, relative strength is measured against the S&P 500 instead of the Nifty 50, the benchmark is the S&P 500 Total Return Index, money is in US dollars ($10,000 default capital), and a day counts as final from 8 pm New York time. The member list comes from Nasdaq, with Wikipedia and a saved snapshot as fallbacks.
+- An uploaded CSV is now read as stocks of the market of the selected index (NSE stocks with a Nifty index, US stocks with the Nasdaq 100).
+- The lending filter has a US version based on the stock list's industry (1.4). "Compare all indices" still covers the ten Nifty indices only.
+- No change to the screener or backtest rules for the Nifty indices.
 
 **19 Nov 2026**
 - Added this document and the Rules tab; all adjustable values moved to `settings.py`.

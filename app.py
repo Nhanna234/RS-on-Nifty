@@ -21,18 +21,21 @@ import compare
 import lender_filter
 import rules_doc
 import settings
+import us_universe
 
 # After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
 # modules in memory. Reload any whose file has changed since it was loaded.
-for _mod in (settings, bt_data, bt_engine, lender_filter, compare, rules_doc):
+for _mod in (settings, bt_data, bt_engine, lender_filter, compare, us_universe, rules_doc):
     _mtime = os.path.getmtime(_mod.__file__)
     if getattr(_mod, "_loaded_mtime", None) != _mtime:
         importlib.reload(_mod)
         _mod._loaded_mtime = _mtime
 
 from settings import (BT_DEFAULTS, COMPARE_ORDER, DEFAULT_INDEX, INDEX_FILES, LONG_START, LOOKBACK_MONTHS,  # noqa: E402
-                      RS_INDEX_TICKER, RS_TRAIL_MONTHS, SCREENER_DEFAULTS, SCREENER_PRICE_PERIOD, WEEKLY_CR_REQ,
-                      WEEKLY_RET_REQ)
+                      MARKETS, RS_TRAIL_MONTHS, SCREENER_DEFAULTS, SCREENER_PRICE_PERIOD, US_INDICES,
+                      WEEKLY_CR_REQ, WEEKLY_RET_REQ, market_of)
+
+ALL_INDICES = list(INDEX_FILES) + list(US_INDICES)
 
 # --- STANDARD INDEX UNIVERSES ---
 # Official NSE Indices constituent files (columns: Company Name, Industry, Symbol, Series, ISIN Code)
@@ -53,6 +56,17 @@ def clean_symbol(s):
     if s.endswith(".NS"):
         s = s[:-3]
     return s
+
+
+def clean_us_symbol(s):
+    """'NASDAQ:aapl', ' brk.b ' -> 'AAPL', 'BRK-B' (Yahoo form)"""
+    return us_universe.yahoo_symbol(s)
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def load_us_constituents(index_name):
+    """Returns (table with Symbol / Company Name / Industry / Subsector / ISIN Code, note on where it came from)."""
+    return us_universe.load_nasdaq100()
 
 
 def _download_index_csv(fname):
@@ -137,6 +151,17 @@ def apply_lender_filter(universe, req):
     if not req.get("excludeLenders", True):
         universe["lenders"] = {"on": False}
         return universe
+    if universe.get("market") == "US":
+        symbols = sorted(set(universe["symbols"]))
+        industries = {s: universe.get("industries", {}).get(s) or universe["sector_map"].get(s, {}).get("Sector", "")
+                      for s in symbols}
+        result = lender_filter.classify_us(symbols, universe["names"], industries,
+                                           req.get("alwaysExclude"), req.get("neverExclude"))
+        drop = {r["symbol"] for r in result["excluded"]}
+        universe["symbols"] = [s for s in universe["symbols"] if s not in drop]
+        universe["sector_map"] = {s: v for s, v in universe["sector_map"].items() if s not in drop}
+        universe["lenders"] = {"on": True, **result}
+        return universe
     tm_names, tm_sectors = total_market_names()
     symbols = sorted(set(universe["symbols"]))
     names = {s: universe["names"].get(s) or tm_names.get(s, "") for s in symbols}
@@ -155,7 +180,7 @@ def apply_lender_filter(universe, req):
     return universe
 
 
-def read_uploaded_universe(files):
+def read_uploaded_universe(files, clean=clean_symbol):
     """Accepts the original format (Symbols, Sector, ISIN) and the NSE format (Symbol, Industry, ISIN Code)."""
     sector_map, symbols = {}, []
     for f in files:
@@ -169,7 +194,7 @@ def read_uploaded_universe(files):
         for _, row in df_temp.iterrows():
             if pd.isna(row[sym_col]):
                 continue
-            s = clean_symbol(row[sym_col])
+            s = clean(row[sym_col])
             if not s:
                 continue
             sec = str(row[sec_col]).strip() if sec_col and pd.notna(row[sec_col]) else "N/A"
@@ -181,11 +206,15 @@ def read_uploaded_universe(files):
 
 # --- RS LOGIC ENGINE ---
 class RSHeatmapScreener:
-    def __init__(self, rs_threshold, lookback_months, output_history, use_ema, cr_threshold, mr_threshold):
+    def __init__(self, rs_threshold, lookback_months, output_history, use_ema, cr_threshold, mr_threshold,
+                 market="IN"):
         self.rs_threshold = rs_threshold / 100.0
         self.lookback_months = lookback_months
         self.output_history = output_history
-        self.index_ticker = RS_INDEX_TICKER
+        self.market = market
+        self.index_ticker = MARKETS[market]["rs_index"]     # Nifty 50, or the S&P 500 for US universes
+        self.suffix = MARKETS[market]["yahoo_suffix"]       # ".NS" for NSE stocks on Yahoo, "" for US stocks
+        self.exchange = MARKETS[market]["exchange"]
         self.use_ema = use_ema
         # kept in percent: the filters below compare (value * 100) against these
         self.cr_threshold = cr_threshold
@@ -227,7 +256,7 @@ class RSHeatmapScreener:
         
         matrix_data = []
         for ticker in stock_prices.columns:
-            clean_name = ticker.replace(".NS", "")
+            clean_name = ticker[:-len(self.suffix)] if self.suffix and ticker.endswith(self.suffix) else ticker
             
             # MONTHLY FILTERS
             curr_price = stock_prices[ticker].iloc[-1]
@@ -249,7 +278,7 @@ class RSHeatmapScreener:
             sector = sector_map.get(clean_name, {}).get("Sector", "N/A")
             isin_val = sector_map.get(clean_name, {}).get("ISIN", "")
 
-            row = {"Symbols": f"NSE:{clean_name}", "Sector": sector, "ISIN_Hidden": isin_val}
+            row = {"Symbols": f"{self.exchange}:{clean_name}", "Sector": sector, "ISIN_Hidden": isin_val}
             has_any_dot = False
             full_rs_series = (stock_prices[ticker] / index_prices).dropna()
 
@@ -290,13 +319,13 @@ def _num(x, nd=2):
 
 def apply_weekly_filter(screener, matrix_df):
     """Phase 2 of the original app: keep stocks whose latest week is strong; add daily figures."""
-    shortlisted_tickers = [s.split(":")[1] + ".NS" for s in matrix_df['Symbols'].tolist()]
+    shortlisted_tickers = [s.split(":")[1] + screener.suffix for s in matrix_df['Symbols'].tolist()]
     weekly_data = screener.fetch_data(shortlisted_tickers, interval="1wk", period="6mo")
     daily_data = screener.fetch_data(shortlisted_tickers, interval="1d", period="1mo")
 
     final_rows = []
     for _, m_row in matrix_df.iterrows():
-        t_name = m_row['Symbols'].split(":")[1] + ".NS"
+        t_name = m_row['Symbols'].split(":")[1] + screener.suffix
         if t_name in weekly_data['Close'].columns:
             w_close, w_high, w_low = weekly_data['Close'][t_name].dropna(), weekly_data['High'][t_name].dropna(), weekly_data['Low'][t_name].dropna()
             if len(w_close) >= 2:
@@ -352,7 +381,7 @@ def build_excel(matrix_df, month_headers):
     return output.getvalue()
 
 
-def describe_stocks(screener, monthly_data, matrix_df, month_headers):
+def describe_stocks(screener, monthly_data, matrix_df, month_headers, tv_prefix="NSE"):
     """Display detail for each shortlisted stock. The shortlist itself comes from the RS engine;
     nothing here changes which stocks qualify."""
     price_df = monthly_data['Close'].dropna(how='all')
@@ -364,7 +393,7 @@ def describe_stocks(screener, monthly_data, matrix_df, month_headers):
     stocks = []
     for _, r in matrix_df.iterrows():
         name = r['Symbols'].split(":")[1]
-        ticker = name + ".NS"
+        ticker = name + screener.suffix
         px = price_df[ticker]
         rs = (px / index_prices).dropna()
 
@@ -396,6 +425,7 @@ def describe_stocks(screener, monthly_data, matrix_df, month_headers):
 
         stocks.append({
             "symbol": name,
+            "tv": f"{tv_prefix}:{name}" if tv_prefix else name,     # symbol as TradingView knows it
             "sector": r['Sector'],
             "isin": r['ISIN_Hidden'] if isinstance(r['ISIN_Hidden'], str) else "",
             "cells": cells,
@@ -417,18 +447,42 @@ def describe_stocks(screener, monthly_data, matrix_df, month_headers):
     return stocks
 
 
+def market_info(market, tv_prefix):
+    """What the dashboard needs to show a universe's market: exchange, currency and RS index."""
+    m = MARKETS[market]
+    return {"code": market, "exchange": m["exchange"], "tvPrefix": tv_prefix, "currency": m["currency"],
+            "rsIndex": m["rs_index_name"]}
+
+
 def resolve_universe(req):
-    """Stocks to analyse: the uploaded CSV(s) if any, otherwise the selected index."""
-    index_name = req.get("index") if req.get("index") in INDEX_FILES else DEFAULT_INDEX
+    """Stocks to analyse: the uploaded CSV(s) if any, otherwise the selected index. The market (India or
+    US) follows the selected index, also for an uploaded list."""
+    index_name = req.get("index") if req.get("index") in ALL_INDICES else DEFAULT_INDEX
+    market = market_of(index_name)
     csv_files = req.get("csvFiles") or []
     if csv_files:
-        sector_map, all_symbols = read_uploaded_universe([io.StringIO(f.get("text", "")) for f in csv_files])
+        sector_map, all_symbols = read_uploaded_universe([io.StringIO(f.get("text", "")) for f in csv_files],
+                                                         clean_us_symbol if market == "US" else clean_symbol)
         if not all_symbols:
             return {"error": "The uploaded file has no 'Symbols' (or 'Symbol') column, or it is empty. "
                              "Fix the file, or remove it to run on the selected index."}
         return apply_lender_filter({"sector_map": sector_map, "symbols": all_symbols, "names": {},
-                                    "source": "your uploaded list",
-                                    "name": ", ".join(f.get("name", "CSV") for f in csv_files)}, req)
+                                    "source": "your uploaded list" + (", read as US stocks" if market == "US" else ""),
+                                    "name": ", ".join(f.get("name", "CSV") for f in csv_files),
+                                    "market": market, "tv_prefix": "" if market == "US" else "NSE"}, req)
+    if market == "US":
+        try:
+            const_df, source = load_us_constituents(index_name)
+        except Exception as e:
+            return {"error": f"Could not load the {index_name} stock list ({e}). Run it again, or upload your own CSV."}
+        sector_map = {r["Symbol"]: {"Sector": r["Industry"] or "N/A", "ISIN": r["ISIN Code"]}
+                      for _, r in const_df.iterrows()}
+        industries = {r["Symbol"]: " / ".join(x for x in (r["Industry"], r["Subsector"]) if x and x != "N/A")
+                      for _, r in const_df.iterrows()}
+        return apply_lender_filter({"sector_map": sector_map, "symbols": list(const_df["Symbol"]),
+                                    "names": dict(zip(const_df["Symbol"], const_df["Company Name"])),
+                                    "industries": industries, "source": source, "name": index_name,
+                                    "market": "US", "tv_prefix": MARKETS["US"]["exchange"]}, req)
     try:
         const_df, source = load_index_constituents(index_name)
     except Exception as e:
@@ -443,12 +497,11 @@ def resolve_universe(req):
         all_symbols.append(s)
     names = dict(zip(const_df["Symbol"], const_df["Company Name"].astype(str)))
     return apply_lender_filter({"sector_map": sector_map, "symbols": all_symbols, "names": names,
-                                "source": source, "name": index_name}, req)
+                                "source": source, "name": index_name, "market": "IN", "tv_prefix": "NSE"}, req)
 
 
 def run_screen(req):
     """Runs the whole screen for one request from the dashboard and returns a JSON-safe result."""
-    index_name = req.get("index") if req.get("index") in INDEX_FILES else DEFAULT_INDEX
     history = int(req.get("history", 6))
     cutoff = float(req.get("threshold", 100))
     use_ema = bool(req.get("useEma", True))
@@ -462,12 +515,12 @@ def run_screen(req):
         return {"ok": False, "error": universe["error"]}
     sector_map, all_symbols = universe["sector_map"], universe["symbols"]
     universe_name, universe_source = universe["name"], universe["source"]
+    market = universe["market"]
 
+    # 2. the RS engine (unchanged; for US stocks the RS index is the S&P 500)
+    screener = RSHeatmapScreener(cutoff, LOOKBACK_MONTHS, history, use_ema, cr_limit, mr_limit, market)
     symbols = sorted(set(all_symbols))
-    unique_tickers = [f"{s}.NS" for s in symbols]
-
-    # 2. the RS engine (unchanged)
-    screener = RSHeatmapScreener(cutoff, LOOKBACK_MONTHS, history, use_ema, cr_limit, mr_limit)
+    unique_tickers = [f"{s}{screener.suffix}" for s in symbols]
     monthly_data = screener.fetch_data(unique_tickers, interval="1mo")
     if monthly_data is None or monthly_data.empty or screener.index_ticker not in monthly_data['Close'].columns:
         return {"ok": False, "error": "Yahoo Finance returned no price data. It may be throttling requests; "
@@ -477,14 +530,16 @@ def run_screen(req):
         matrix_df = apply_weekly_filter(screener, matrix_df)
 
     now = datetime.now(IST)
+    market_today = bt_data.market_now(market).date()
     last_month = monthly_data['Close'].dropna(how='all').index[-1]
     result = {
         "ok": True,
+        "market": market_info(market, universe["tv_prefix"]),
         "universe": {"name": universe_name, "source": universe_source, "count": len(symbols)},
         "lenders": universe.get("lenders"),
         "asOf": now.strftime("%d %b %Y, %H:%M IST"),
         "months": month_headers,
-        "monthInProgress": (last_month.year, last_month.month) == (now.year, now.month),
+        "monthInProgress": (last_month.year, last_month.month) == (market_today.year, market_today.month),
         "settings": {"history": history, "threshold": cutoff, "useEma": use_ema, "cr": cr_limit,
                      "mr": mr_limit, "weekly": enable_weekly},
         "sectorTotals": dict(Counter(sector_map[s]["Sector"] for s in symbols)),
@@ -495,7 +550,7 @@ def run_screen(req):
         return result
 
     matrix_df = matrix_df.sort_values(by=["Sector", "Symbols"]).reset_index(drop=True)
-    result["stocks"] = describe_stocks(screener, monthly_data, matrix_df, month_headers)
+    result["stocks"] = describe_stocks(screener, monthly_data, matrix_df, month_headers, universe["tv_prefix"])
     result["excel"] = base64.b64encode(build_excel(matrix_df, month_headers)).decode("ascii")
     return result
 
@@ -503,30 +558,37 @@ def run_screen(req):
 # --- BACKTEST ---
 
 
-@st.cache_resource(max_entries=1)
-def _price_store(code_version):
-    return bt_data.PriceStore(os.path.join(tempfile.gettempdir(), "rs_bt_price_store"))
+PRICE_STORE_DIRS = {"IN": "rs_bt_price_store", "US": "rs_bt_price_store_us"}
 
 
-def price_store():
-    """One shared daily-price store for all users of this app (kept on the server's disk). It is rebuilt
-    when bt_data.py changes, so it never runs old code after an update; the prices on disk are reused."""
-    return _price_store(os.path.getmtime(bt_data.__file__))
+@st.cache_resource(max_entries=2)
+def _price_store(code_version, market):
+    return bt_data.PriceStore(os.path.join(tempfile.gettempdir(), PRICE_STORE_DIRS[market]),
+                              suffix=MARKETS[market]["yahoo_suffix"])
+
+
+def price_store(market="IN"):
+    """One shared daily-price store per market for all users of this app (kept on the server's disk). It is
+    rebuilt when bt_data.py changes, so it never runs old code after an update; the prices on disk are reused.
+    Indian and US prices are kept apart, because a symbol can mean different companies on the two markets."""
+    return _price_store(os.path.getmtime(bt_data.__file__), market)
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def load_rs_index(cutoff_key):
-    return bt_data.rs_index_monthly(pd.Timestamp(bt_data.DATA_START).date(), datetime.now(IST).date())
+def load_rs_index(cutoff_key, market="IN"):
+    return bt_data.rs_index_monthly(pd.Timestamp(bt_data.DATA_START).date(), datetime.now(IST).date(),
+                                    MARKETS[market]["rs_index"])
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def load_benchmark(cutoff_key):
-    return bt_data.benchmark_monthly(pd.Timestamp(bt_data.DATA_START).date(), datetime.now(IST).date())
+def load_benchmark(cutoff_key, market="IN"):
+    return bt_data.benchmark_monthly(pd.Timestamp(bt_data.DATA_START).date(), datetime.now(IST).date(), market)
 
 
 def run_backtest(req, progress=None):
     """Runs one backtest request from the dashboard and returns a JSON-safe result."""
-    last_done = bt_data.last_completed_month()
+    market = market_of(req.get("index"))
+    last_done = bt_data.last_completed_month(market=market)
     earliest = pd.Period(bt_data.EARLIEST_START, "M")
     try:
         start = pd.Period(str(req.get("start") or BT_DEFAULTS["start"]), "M")
@@ -551,7 +613,7 @@ def run_backtest(req, progress=None):
         "cr_min": float(req.get("cr", 75)), "mr_min": float(req.get("mr", 5)),
         "cost": max(0.0, float(req.get("cost", 0.2))) / 100.0,
         "cash_yield": float(req.get("cashYield", 6)) / 100.0,
-        "capital": max(1000.0, float(req.get("capital", 1_000_000))),
+        "capital": max(1000.0, float(req.get("capital", MARKETS[market]["capital"]))),
         "ranking": req.get("ranking") if req.get("ranking") in bt_engine.RANKINGS else "cr",
     }
 
@@ -561,23 +623,25 @@ def run_backtest(req, progress=None):
     symbols = sorted(set(universe["symbols"]))
     sectors = {s: universe["sector_map"][s]["Sector"] for s in symbols}
 
-    store = price_store()
-    cutoff = bt_data.last_cutoff()
-    session = bt_data.last_session_date()
+    store = price_store(market)
+    cutoff = bt_data.last_cutoff(market=market)
+    session = bt_data.last_session_date(market=market)
     stats = store.update(symbols, cutoff, progress, need_date=session)
-    # monthly candles up to the running month; the backtest itself uses completed months only
-    cur = pd.Period(bt_data.now_ist().date(), "M")
+    # monthly candles up to the running month (on the market's own calendar); the backtest itself uses
+    # completed months only
+    cur = bt_data.running_month(market=market)
     try:
         monthly_all, spikes = bt_engine.monthly_in_batches(store.panel, symbols, cur)
     except RuntimeError:
         return {"ok": False, "error": "Yahoo Finance returned no price data for this universe. "
                                       "It may be throttling requests; wait a minute and run it again."}
     try:
-        rs_index = load_rs_index(cutoff.isoformat())
+        rs_index = load_rs_index(cutoff.isoformat(), market)
     except Exception as e:
-        return {"ok": False, "error": f"Could not download the Nifty 50 index from Yahoo Finance ({e}). Run it again."}
+        return {"ok": False, "error": f"Could not download the {MARKETS[market]['rs_index_name']} index from "
+                                      f"Yahoo Finance ({e}). Run it again."}
     try:
-        bench, bench_source = load_benchmark(cutoff.isoformat())
+        bench, bench_source = load_benchmark(cutoff.isoformat(), market)
     except Exception:
         bench, bench_source = pd.Series(dtype=float), "unavailable"
 
@@ -620,10 +684,13 @@ def run_backtest(req, progress=None):
         ("Ranking", bt_engine.RANKINGS[p["ranking"]]), ("Cost per buy and per sell %", p["cost"] * 100),
         ("Cash yield % a year", p["cash_yield"] * 100), ("Starting capital", p["capital"]),
         ("Lending companies", "Excluded" if (universe.get("lenders") or {}).get("on") else "Included"),
+        ("Currency", MARKETS[market]["currency"]),
+        ("Relative strength measured against", MARKETS[market]["rs_index_name"]),
         ("Benchmark", bench_source),
     ]
     return {
         "ok": True,
+        "market": market_info(market, universe["tv_prefix"]),
         "asOf": bt_data.now_ist().strftime("%d %b %Y, %H:%M IST"),
         "lenders": universe.get("lenders"),
         "universe": {"name": universe["name"], "source": universe["source"], "count": len(symbols),
@@ -768,11 +835,15 @@ rs_dashboard = components.declare_component("rs_dashboard", path=str(FRONTEND_DI
 progress_slot = st.empty()
 
 request = rs_dashboard(
-    indices=list(INDEX_FILES),
-    defaults=SCREENER_DEFAULTS,
+    indices=ALL_INDICES,
+    defaults={**SCREENER_DEFAULTS, "indexMarkets": {name: market_of(name) for name in ALL_INDICES}},
     result=st.session_state.get("result"),
     btDefaults={**BT_DEFAULTS, "end": str(bt_data.last_completed_month()), "earliest": bt_data.EARLIEST_START,
-                "rankings": bt_engine.RANKINGS},
+                "rankings": bt_engine.RANKINGS,
+                "indexMarkets": {name: market_of(name) for name in ALL_INDICES},
+                "markets": {k: {"currency": m["currency"], "capital": m["capital"], "rsIndex": m["rs_index_name"],
+                                "end": str(bt_data.last_completed_month(market=k))}
+                            for k, m in MARKETS.items()}},
     btResult=st.session_state.get("bt_result"),
     rulesMd=rules_doc.rules_for_app(),
     cmpResult=st.session_state.get("cmp_result"),

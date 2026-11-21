@@ -20,6 +20,22 @@ INDEX_FILES = {                      # NSE Indices constituent files
     "Nifty Total Market": "ind_niftytotalmarket_list.csv",
 }
 DEFAULT_INDEX = "Nifty Total Market"
+US_INDICES = ["Nasdaq 100"]          # US universes; their lists come from us_universe.py
+
+# ---- markets: what changes between an Indian and a US universe
+# The market follows the selected index; an uploaded CSV is read as the market of the index selected with it.
+MARKETS = {
+    "IN": {"exchange": "NSE", "yahoo_suffix": ".NS", "rs_index": "^NSEI", "rs_index_name": "Nifty 50",
+           "currency": "INR", "capital": 1_000_000},
+    "US": {"exchange": "NASDAQ", "yahoo_suffix": "", "rs_index": "^GSPC", "rs_index_name": "S&P 500",
+           "currency": "USD", "capital": 10_000},
+}
+
+
+def market_of(index_name):
+    """'US' for a US index, otherwise 'IN'."""
+    return "US" if index_name in US_INDICES else "IN"
+
 
 # ---- screener
 SCREENER_DEFAULTS = {"index": DEFAULT_INDEX, "history": 6, "threshold": 100, "useEma": True, "cr": 75, "mr": 5,
@@ -29,7 +45,7 @@ SCREENER_PRICE_PERIOD = "3y"  # monthly prices downloaded for the screener
 RS_TRAIL_MONTHS = 24          # length of the RS line drawn for each stock
 WEEKLY_RET_REQ = 4            # weekly drill-down: latest week's return must be above this %
 WEEKLY_CR_REQ = 75            # weekly drill-down: latest week's closing range must be above this %
-RS_INDEX_TICKER = "^NSEI"     # Nifty 50 price index on Yahoo: the denominator of relative strength
+RS_INDEX_TICKER = MARKETS["IN"]["rs_index"]  # Nifty 50 price index on Yahoo: the denominator of relative strength
 
 # ---- backtest
 BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 98, "useEma": True,
