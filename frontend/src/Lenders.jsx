@@ -25,7 +25,7 @@ export function LenderControl({ value, onChange, idPrefix }) {
   const set = (k) => (e) => {
     const next = { ...value, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value };
     onChange(next);
-    if (k !== "excludeLenders") saveOverrides({ alwaysExclude: next.alwaysExclude, neverExclude: next.neverExclude });
+    if (k !== "excludeLenders" && k !== "excludeFinancials") saveOverrides({ alwaysExclude: next.alwaysExclude, neverExclude: next.neverExclude });
   };
   return (
     <div className="lender-control">
@@ -35,6 +35,12 @@ export function LenderControl({ value, onChange, idPrefix }) {
           <span className="switch-track" aria-hidden="true" />
           Exclude lending companies
         </label>
+        {value.excludeLenders && (
+          <label className="check-inline">
+            <input type="checkbox" checked={Boolean(value.excludeFinancials)} onChange={set("excludeFinancials")} />
+            and all other financial companies
+          </label>
+        )}
         <button type="button" className="link-btn" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
           {open ? "Hide my lists" : "Adjust the list"}
         </button>
@@ -57,7 +63,7 @@ export function LenderControl({ value, onChange, idPrefix }) {
 }
 
 export function useLenderSettings(defaultOn = true) {
-  const [v, setV] = useState(() => ({ excludeLenders: defaultOn, ...loadOverrides() }));
+  const [v, setV] = useState(() => ({ excludeLenders: defaultOn, excludeFinancials: false, ...loadOverrides() }));
   // pick up list edits made in the other tab
   useEffect(() => {
     const onStorage = (e) => e.key === KEY && setV((cur) => ({ ...cur, ...loadOverrides() }));
@@ -85,11 +91,14 @@ export function LenderNote({ lenders }) {
   return (
     <details className="caveats lender-note">
       <summary>
-        {ex.length} lending {ex.length === 1 ? "company" : "companies"} left out, {status}
+        {ex.length} {lenders.allFinancials ? "financial" : "lending"} {ex.length === 1 ? "company" : "companies"} left out
+        {lenders.allFinancials ? " (lenders and all other financial companies)" : ""}, {status}
       </summary>
       <p className="lender-def">
         {lenders.definition ||
-          "Lending means NSE's basic industry is a bank (public, private, small finance, payment or foreign), an NBFC, a housing finance company or a financial institution. Insurers, fund houses, brokers, exchanges, depositories and holding companies stay in."}
+          (lenders.allFinancials
+            ? "Every company in NSE's Financial Services sector is left out: banks, NBFCs, housing finance, insurers, fund houses, brokers, exchanges, depositories and holding companies. Your always-exclude list removes any other stock you name."
+            : "Lending means NSE's basic industry is a bank (public, private, small finance, payment or foreign), an NBFC, a housing finance company or a financial institution. Insurers, fund houses, brokers, exchanges, depositories and holding companies stay in.")}
       </p>
       <div className="lender-cols">
         <div>
@@ -98,7 +107,7 @@ export function LenderNote({ lenders }) {
         </div>
         <div>
           <h4>
-            {lenders.market === "US" ? "Kept by your never-exclude list" : "Other financial companies kept"} ({kept.length})
+            {lenders.market === "US" || lenders.allFinancials ? "Kept by your never-exclude list" : "Other financial companies kept"} ({kept.length})
           </h4>
           <LenderTable rows={kept} />
         </div>

@@ -22,11 +22,12 @@ import compare
 import lender_filter
 import rules_doc
 import settings
+import sweep
 import us_universe
 
 # After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
 # modules in memory. Reload any whose file has changed since it was loaded.
-for _mod in (settings, auth, bt_data, bt_engine, lender_filter, compare, us_universe, rules_doc):
+for _mod in (settings, auth, bt_data, bt_engine, lender_filter, compare, sweep, us_universe, rules_doc):
     _mtime = os.path.getmtime(_mod.__file__)
     if getattr(_mod, "_loaded_mtime", None) != _mtime:
         importlib.reload(_mod)
@@ -174,6 +175,13 @@ def apply_lender_filter(universe, req):
             sectors[s] = tm_sectors[s]
     result = lender_filter.classify(symbols, names, sectors, basic_industry_cache(), load_nbfc_index(),
                                     req.get("alwaysExclude"), req.get("neverExclude"))
+    result["allFinancials"] = bool(req.get("excludeFinancials"))
+    if result["allFinancials"]:
+        # leave out every financial company, not only lenders (your never-exclude list still keeps a stock)
+        moved = [r for r in result["kept"] if r["source"] != "your never-exclude list"]
+        result["excluded"] = sorted(result["excluded"] + [{**r, "source": "all financial companies left out"}
+                                                          for r in moved], key=lambda r: r["symbol"])
+        result["kept"] = [r for r in result["kept"] if r["source"] == "your never-exclude list"]
     drop = {r["symbol"] for r in result["excluded"]}
     universe["symbols"] = [s for s in universe["symbols"] if s not in drop]
     universe["sector_map"] = {s: v for s, v in universe["sector_map"].items() if s not in drop}
@@ -586,8 +594,9 @@ def load_benchmark(cutoff_key, market="IN"):
     return bt_data.benchmark_monthly(pd.Timestamp(bt_data.DATA_START).date(), datetime.now(IST).date(), market)
 
 
-def run_backtest(req, progress=None):
-    """Runs one backtest request from the dashboard and returns a JSON-safe result."""
+def prepare_backtest(req, progress=None):
+    """Everything a backtest needs before simulating: checked period, parameters, universe and monthly prices.
+    Returns {"error": ...} or a dict of the pieces."""
     market = market_of(req.get("index"))
     last_done = bt_data.last_completed_month(market=market)
     earliest = pd.Period(bt_data.EARLIEST_START, "M")
@@ -595,7 +604,7 @@ def run_backtest(req, progress=None):
         start = pd.Period(str(req.get("start") or BT_DEFAULTS["start"]), "M")
         end = pd.Period(str(req.get("end") or last_done), "M")
     except Exception:
-        return {"ok": False, "error": "Start and end must be months, for example 2015-01."}
+        return {"error": "Start and end must be months, for example 2015-01."}
     notes = []
     if end > last_done:
         notes.append(f"The end was moved to {last_done.strftime('%b %Y')}, the last completed month.")
@@ -605,7 +614,7 @@ def run_backtest(req, progress=None):
                      f"of history that RS needs.")
         start = earliest
     if (end - start).n < 2:
-        return {"ok": False, "error": "Choose an end month at least three months after the start month."}
+        return {"error": "Choose an end month at least three months after the start month."}
 
     p = {
         "slots": int(min(50, max(1, int(req.get("slots", 10))))),
@@ -620,7 +629,7 @@ def run_backtest(req, progress=None):
 
     universe = resolve_universe(req)
     if "error" in universe:
-        return {"ok": False, "error": universe["error"]}
+        return {"error": universe["error"]}
     symbols = sorted(set(universe["symbols"]))
     sectors = {s: universe["sector_map"][s]["Sector"] for s in symbols}
 
@@ -634,13 +643,13 @@ def run_backtest(req, progress=None):
     try:
         monthly_all, spikes = bt_engine.monthly_in_batches(store.panel, symbols, cur)
     except RuntimeError:
-        return {"ok": False, "error": "Yahoo Finance returned no price data for this universe. "
-                                      "It may be throttling requests; wait a minute and run it again."}
+        return {"error": "Yahoo Finance returned no price data for this universe. "
+                         "It may be throttling requests; wait a minute and run it again."}
     try:
         rs_index = load_rs_index(cutoff.isoformat(), market)
     except Exception as e:
-        return {"ok": False, "error": f"Could not download the {MARKETS[market]['rs_index_name']} index from "
-                                      f"Yahoo Finance ({e}). Run it again."}
+        return {"error": f"Could not download the {MARKETS[market]['rs_index_name']} index from "
+                         f"Yahoo Finance ({e}). Run it again."}
     try:
         bench, bench_source = load_benchmark(cutoff.isoformat(), market)
     except Exception:
@@ -648,7 +657,42 @@ def run_backtest(req, progress=None):
 
     monthly = {f: df[df.index <= end] for f, df in monthly_all.items()}
     if start - 1 not in monthly["Close"].index:
-        return {"ok": False, "error": "There is no price data for the month before the start. Pick a later start."}
+        return {"error": "There is no price data for the month before the start. Pick a later start."}
+    return {"market": market, "last_done": last_done, "start": start, "end": end, "notes": notes, "p": p,
+            "universe": universe, "symbols": symbols, "sectors": sectors, "store": store, "session": session,
+            "stats": stats, "cur": cur, "monthly_all": monthly_all, "spikes": spikes, "rs_index": rs_index,
+            "bench": bench, "bench_source": bench_source, "monthly": monthly}
+
+
+def bt_settings_rows(universe, start, end, p, market, bench_source):
+    """The settings block of a backtest workbook."""
+    lenders = universe.get("lenders") or {}
+    return [
+        ("Universe", universe["name"]), ("Period", f"{start.strftime('%b %Y')} to {end.strftime('%b %Y')}"),
+        ("Stocks held", p["slots"]), ("Minimum RS threshold %", p["threshold"] * 100),
+        ("Price above 12-month EMA", "Yes" if p["use_ema"] else "No"),
+        ("Min closing range %", p["cr_min"]), ("Min monthly return %", p["mr_min"]),
+        ("Ranking", bt_engine.RANKINGS[p["ranking"]]), ("Cost per buy and per sell %", p["cost"] * 100),
+        ("Cash yield % a year", p["cash_yield"] * 100), ("Starting capital", p["capital"]),
+        ("Lending companies", "Excluded" if lenders.get("on") else "Included"),
+        ("Other financial companies", "Excluded" if lenders.get("allFinancials") else "Included"),
+        ("Always excluded (your list)", ", ".join(sorted(r["symbol"] for r in lenders.get("excluded", [])
+                                                          if r.get("source") == "your always-exclude list")) or "None"),
+        ("Currency", MARKETS[market]["currency"]),
+        ("Relative strength measured against", MARKETS[market]["rs_index_name"]),
+        ("Benchmark", bench_source),
+    ]
+
+
+def run_backtest(req, progress=None):
+    """Runs one backtest request from the dashboard and returns a JSON-safe result."""
+    ctx = prepare_backtest(req, progress)
+    if "error" in ctx:
+        return {"ok": False, "error": ctx["error"]}
+    market, last_done, start, end, notes, p = (ctx[k] for k in ("market", "last_done", "start", "end", "notes", "p"))
+    universe, symbols, sectors, store, session = (ctx[k] for k in ("universe", "symbols", "sectors", "store", "session"))
+    stats, cur, monthly_all, spikes, rs_index = (ctx[k] for k in ("stats", "cur", "monthly_all", "spikes", "rs_index"))
+    bench, bench_source, monthly = ctx["bench"], ctx["bench_source"], ctx["monthly"]
     ind = bt_engine.indicators(monthly, rs_index)
     sim = bt_engine.simulate(monthly, ind, p, start, end, sectors)
     report = bt_engine.build_report(sim, bench, p, start, end)
@@ -677,18 +721,7 @@ def run_backtest(req, progress=None):
 
     with_data = list(monthly["Close"].columns)
     missing = sorted(set(symbols) - set(with_data))
-    settings_rows = [
-        ("Universe", universe["name"]), ("Period", f"{start.strftime('%b %Y')} to {end.strftime('%b %Y')}"),
-        ("Stocks held", p["slots"]), ("Minimum RS threshold %", p["threshold"] * 100),
-        ("Price above 12-month EMA", "Yes" if p["use_ema"] else "No"),
-        ("Min closing range %", p["cr_min"]), ("Min monthly return %", p["mr_min"]),
-        ("Ranking", bt_engine.RANKINGS[p["ranking"]]), ("Cost per buy and per sell %", p["cost"] * 100),
-        ("Cash yield % a year", p["cash_yield"] * 100), ("Starting capital", p["capital"]),
-        ("Lending companies", "Excluded" if (universe.get("lenders") or {}).get("on") else "Included"),
-        ("Currency", MARKETS[market]["currency"]),
-        ("Relative strength measured against", MARKETS[market]["rs_index_name"]),
-        ("Benchmark", bench_source),
-    ]
+    settings_rows = bt_settings_rows(universe, start, end, p, market, bench_source)
     return {
         "ok": True,
         "market": market_info(market, universe["tv_prefix"]),
@@ -710,6 +743,49 @@ def run_backtest(req, progress=None):
         "live": live,
         "orders": orders,
         "excel": base64.b64encode(bt_engine.to_excel(report, settings_rows)).decode("ascii"),
+    }
+
+
+# --- START-MONTH SWEEP ---
+
+
+def run_sweep(req, progress=None, step=None):
+    """The backtest once for every start month from the chosen start to three months before the end."""
+    ctx = prepare_backtest(req, progress)
+    if "error" in ctx:
+        return {"ok": False, "error": ctx["error"]}
+    market, start, end, p = ctx["market"], ctx["start"], ctx["end"], ctx["p"]
+    starts = sweep.start_months(start, end)
+    if len(starts) > sweep.MAX_SWEEP_RUNS:
+        return {"ok": False, "error": f"That is {len(starts)} start months; the most in one sweep is "
+                                      f"{sweep.MAX_SWEEP_RUNS}. Pick a later start month."}
+    if step:
+        step("Preparing monthly prices")
+    ind = bt_engine.indicators(ctx["monthly"], ctx["rs_index"])
+    res = sweep.run_sweep(
+        ctx["monthly"], ind, p, starts, end, ctx["sectors"], ctx["bench"],
+        lambda s: bt_settings_rows(ctx["universe"], s, end, p, market, ctx["bench_source"]),
+        progress=(lambda k, n, s: step(f"Backtesting from {s.strftime('%b %Y')} ({k} of {n})")) if step else None)
+    rows_settings = bt_settings_rows(ctx["universe"], start, end, p, market, ctx["bench_source"])
+    rows_settings[1] = ("Start months", f"Every month from {starts[0].strftime('%b %Y')} to "
+                                        f"{starts[-1].strftime('%b %Y')}, each run to {end.strftime('%b %Y')}")
+    if step:
+        step("Writing the Excel files")
+    universe = ctx["universe"]
+    return {
+        "ok": True,
+        "market": market_info(market, universe["tv_prefix"]),
+        "asOf": bt_data.now_ist().strftime("%d %b %Y, %H:%M IST"),
+        "universe": {"name": universe["name"], "count": len(ctx["symbols"]),
+                     "withData": len(ctx["monthly"]["Close"].columns)},
+        "lenders": universe.get("lenders"),
+        "end": end.strftime("%b %Y"), "endKey": str(end),
+        "settings": {"threshold": p["threshold"] * 100, "cost": p["cost"] * 100, "slots": p["slots"]},
+        "benchmarkSource": ctx["bench_source"],
+        "notes": ctx["notes"],
+        "rows": sweep.json_rows(res["rows"]),
+        "overview": [(k, v) for k, v in sweep.overview(res["rows"])],
+        "zip": base64.b64encode(sweep.to_zip(res, rows_settings)).decode("ascii"),
     }
 
 
@@ -940,6 +1016,7 @@ request = rs_dashboard(
     btResult=st.session_state.get("bt_result"),
     rulesMd=rules_doc.rules_for_app(),
     cmpResult=st.session_state.get("cmp_result"),
+    sweepResult=st.session_state.get("sweep_result"),
     user={"name": current_user, "admin": current_user in login_cfg["admins"],
           # a new "keep me signed in" cookie for the dashboard to store; "" removes it
           "token": st.session_state.get("new_token"), "cookie": auth.COOKIE_NAME,
@@ -956,7 +1033,7 @@ if request and request.get("nonce") and request["nonce"] != st.session_state.get
         st.session_state.pop("new_token", None)
         st.rerun()
     if kind == "logout":
-        for k in ("user", "new_token", "result", "bt_result", "cmp_result"):
+        for k in ("user", "new_token", "result", "bt_result", "cmp_result", "sweep_result"):
             st.session_state.pop(k, None)
         st.session_state["signed_out"] = True            # do not sign straight back in from the old cookie
         st.rerun()
@@ -973,14 +1050,16 @@ if request and request.get("nonce") and request["nonce"] != st.session_state.get
             outcome = run_backtest(request, show_progress)
         elif kind == "compare":
             outcome = run_compare(request, show_progress, show_step)
+        elif kind == "sweep":
+            outcome = run_sweep(request, show_progress, show_step)
         else:
             outcome = run_screen(request)
     except Exception as e:
-        what = {"backtest": "backtest", "compare": "comparison"}.get(kind, "screen")
+        what = {"backtest": "backtest", "compare": "comparison", "sweep": "start-month test"}.get(kind, "screen")
         outcome = {"ok": False, "error": f"The {what} stopped with an error: {type(e).__name__}: {e}"}
     progress_slot.empty()
     outcome["nonce"] = request["nonce"]
-    st.session_state[{"backtest": "bt_result", "compare": "cmp_result"}.get(kind, "result")] = outcome
+    st.session_state[{"backtest": "bt_result", "compare": "cmp_result", "sweep": "sweep_result"}.get(kind, "result")] = outcome
     st.rerun()
 
 

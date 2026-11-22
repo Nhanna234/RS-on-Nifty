@@ -477,3 +477,17 @@ button, input, select { font: inherit; color: inherit; }
 /* signed-in user */
 .account { display: inline-flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--ink-3); }
 .account strong { color: var(--ink); font-weight: 600; }
+
+/* lender switch: all financial companies */
+.check-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--ink-2); cursor: pointer; }
+
+/* start-month sweep */
+.sweep-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 4px 0 14px; }
+.sweep-stats > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; }
+.stat-label { font-size: 12.5px; color: var(--ink-3); }
+.stat-value { font-weight: 650; font-variant-numeric: tabular-nums; }
+.sweep-chart { width: 100%; margin-bottom: 14px; }
+.sweep-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: var(--ink-2); }
+.sweep-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.sweep-legend i.dot { border-radius: 50%; background: var(--ink); width: 6px; height: 6px; vertical-align: 1px; }
+.sweep-hover { color: var(--ink); font-weight: 600; }

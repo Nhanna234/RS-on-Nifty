@@ -28,11 +28,13 @@ export default function App() {
   const result = args?.result || null;
   const btResult = args?.btResult || null;
   const cmpResult = args?.cmpResult || null;
+  const sweepResult = args?.sweepResult || null;
   useEffect(() => {
     if (!running) return;
-    const done = running.kind === "backtest" ? btResult : running.kind === "compare" ? cmpResult : result;
+    const done =
+      running.kind === "backtest" ? btResult : running.kind === "compare" ? cmpResult : running.kind === "sweep" ? sweepResult : result;
     if (done && done.nonce === running.nonce) setRunning(null);
-  }, [running, result, btResult, cmpResult]);
+  }, [running, result, btResult, cmpResult, sweepResult]);
 
   const run = (kind, settings, csvFiles) => {
     const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -42,8 +44,8 @@ export default function App() {
       setTimeout(
         () =>
           setArgs((a) =>
-            kind === "backtest" || kind === "compare"
-              ? { ...a, [kind === "compare" ? "cmpResult" : "btResult"]: { ok: false, nonce, error: "Backtests run in the Python app. Start it with: streamlit run app.py" } }
+            kind === "backtest" || kind === "compare" || kind === "sweep"
+              ? { ...a, [kind === "compare" ? "cmpResult" : kind === "sweep" ? "sweepResult" : "btResult"]: { ok: false, nonce, error: "Backtests run in the Python app. Start it with: streamlit run app.py" } }
               : { ...a, result: sampleResult(nonce, settings) }
           ),
         900
@@ -115,6 +117,9 @@ export default function App() {
           cmpResult={cmpResult}
           cmpRunning={running?.kind === "compare"}
           onCompare={(settings) => run("compare", settings, [])}
+          sweepResult={sweepResult}
+          sweepRunning={running?.kind === "sweep"}
+          onSweep={(settings, files) => run("sweep", settings, files)}
         />
       ) : (
         <>

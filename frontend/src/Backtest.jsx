@@ -48,12 +48,37 @@ const monthKeyLabel = (key) => {
 };
 
 /* ---------- page ---------- */
-export default function Backtest({ indices, defaults, result, running, busy, onRun, cmpResult, cmpRunning, onCompare }) {
+export default function Backtest({
+  indices, defaults, result, running, busy, onRun, cmpResult, cmpRunning, onCompare, sweepResult, sweepRunning, onSweep,
+}) {
   CURRENCY = result?.market?.currency || "INR";
   TV_PREFIX = result?.market ? result.market.tvPrefix : "NSE";
   return (
     <>
-      <BtControls indices={indices} defaults={defaults} running={running} busy={busy} onRun={onRun} onCompare={onCompare} cmpRunning={cmpRunning} />
+      <BtControls
+        indices={indices}
+        defaults={defaults}
+        running={running}
+        busy={busy}
+        onRun={onRun}
+        onCompare={onCompare}
+        cmpRunning={cmpRunning}
+        onSweep={onSweep}
+        sweepRunning={sweepRunning}
+      />
+      {sweepRunning && (
+        <div className="banner banner-run" role="status">
+          <span className="pulse-dot" aria-hidden="true" />
+          Backtesting once for every start month from your start month, each run to your end month. Progress shows above
+          this page; with stored prices it takes about a minute.
+        </div>
+      )}
+      {sweepResult && !sweepResult.ok && !sweepRunning && (
+        <div className="banner banner-error" role="alert">
+          {sweepResult.error}
+        </div>
+      )}
+      {sweepResult && sweepResult.ok && <SweepPanel r={sweepResult} dimmed={sweepRunning} />}
       {cmpRunning && (
         <div className="banner banner-run" role="status">
           <span className="pulse-dot" aria-hidden="true" />
@@ -89,7 +114,7 @@ export default function Backtest({ indices, defaults, result, running, busy, onR
 }
 
 /* ---------- settings ---------- */
-function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRunning }) {
+function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRunning, onSweep, sweepRunning }) {
   const [s, setS] = useState(defaults);
   const [files, setFiles] = useState([]);
   const [lend, setLend] = useLenderSettings(defaults.excludeLenders !== false);
@@ -244,6 +269,15 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
           title="Same settings, all ten Nifty indices (not the Nasdaq 100), your period and since Jan 2015, in one Excel file"
         >
           {cmpRunning ? "Comparing…" : "Compare all indices"}
+        </button>
+        <button
+          className="ghost-btn"
+          type="button"
+          disabled={busy}
+          onClick={() => onSweep(settings(), files)}
+          title="Same settings, run once for every start month from your start month, each to your end month; one zip of Excel files"
+        >
+          {sweepRunning ? "Testing…" : "Test every start month"}
         </button>
       </div>
     </form>
@@ -1375,5 +1409,151 @@ function TradeLog({ trades, onExcel }) {
         </table>
       </div>
     </div>
+  );
+}
+
+/* ---------- start-month sweep ---------- */
+function SweepPanel({ r, dimmed }) {
+  const [ref, width] = useWidth();
+  const [hover, setHover] = useState(null);
+  const rows = r.rows;
+  const ov = Object.fromEntries(r.overview);
+  const download = () => {
+    const bytes = Uint8Array.from(atob(r.zip), (ch) => ch.charCodeAt(0));
+    downloadBlob(`RS_start_sweep_to_${r.endKey}.zip`, new Blob([bytes], { type: "application/zip" }));
+  };
+  // chart: annual return (up) and deepest fall (down) for each start month
+  const W = Math.max(360, width);
+  const pad = { l: 52, r: 16, t: 18, b: 40 };
+  const H = 300;
+  const vals = rows.flatMap((x) => [x.CAGR ?? 0, x["Benchmark CAGR"] ?? 0, x["Max drawdown"] ?? 0]);
+  const hi = Math.max(0.1, ...vals) * 1.08;
+  const lo = Math.min(-0.1, ...vals) * 1.08;
+  const y = (v) => pad.t + ((hi - v) / (hi - lo)) * (H - pad.t - pad.b);
+  const band = (W - pad.l - pad.r) / Math.max(1, rows.length);
+  const bw = Math.max(2, Math.min(14, band - 2));
+  const xc = (i) => pad.l + band * (i + 0.5);
+  const ticks = [];
+  for (let t = Math.ceil(lo / 0.25) * 0.25; t <= hi; t += 0.25) ticks.push(Math.round(t * 100) / 100);
+  const every = Math.max(1, Math.ceil(rows.length / Math.max(1, Math.floor((W - pad.l - pad.r) / 48))));
+  const h = hover != null ? rows[hover] : null;
+  return (
+    <section className={`panel sweep-panel${dimmed ? " dimmed" : ""}`}>
+      <div className="live-head">
+        <div>
+          <h3>Results by start month, each run to {r.end}</h3>
+          <p className="chart-hint">
+            {r.universe.name}, {r.universe.withData} stocks with prices, RS threshold {num(r.settings.threshold, 0)}%,{" "}
+            {num(r.settings.cost, 2)}% cost per trade. Annual return is shown only for runs of 12 months or more. Run at{" "}
+            {r.asOf}.
+          </p>
+        </div>
+        <div className="toolbar-actions">
+          <button type="button" className="run-btn" onClick={download}>
+            Download all runs (zip of Excel files)
+          </button>
+        </div>
+      </div>
+      <div className="sweep-stats">
+        <div>
+          <span className="stat-label">Median annual return</span>
+          <span className="stat-value">{pct(ov["Annual return: median"])}</span>
+        </div>
+        <div>
+          <span className="stat-label">Lowest to highest</span>
+          <span className="stat-value">
+            {pct(ov["Annual return: lowest"])} to {pct(ov["Annual return: highest"])}
+          </span>
+        </div>
+        <div>
+          <span className="stat-label">Starts that beat the benchmark</span>
+          <span className="stat-value">{pct(ov["Starts that beat the benchmark"], 0)}</span>
+        </div>
+        <div>
+          <span className="stat-label">Deepest fall, median and worst</span>
+          <span className="stat-value">
+            {pct(ov["Deepest fall: median"])}, {pct(ov["Deepest fall: worst"])}
+          </span>
+        </div>
+      </div>
+      <div ref={ref} className="sweep-chart">
+        <svg width={W} height={H} role="img" aria-label="Annual return and deepest fall by start month">
+          {ticks.map((t) => (
+            <g key={t}>
+              <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} stroke={t === 0 ? "#74828f" : "#e6ecef"} />
+              <text x={pad.l - 8} y={y(t) + 4} textAnchor="end" fontSize="11" fill="#74828f">
+                {Math.round(t * 100)}%
+              </text>
+            </g>
+          ))}
+          {rows.map((x, i) => (
+            <g key={x.startKey} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+              <rect x={xc(i) - band / 2} y={pad.t} width={band} height={H - pad.t - pad.b} fill={hover === i ? "#e8eef1" : "transparent"} />
+              {x.CAGR != null && (
+                <rect x={xc(i) - bw / 2} y={y(Math.max(0, x.CAGR))} width={bw} height={Math.abs(y(x.CAGR) - y(0))} rx="2" fill={x.CAGR >= 0 ? "#1f9a93" : "#7ccbc5"} />
+              )}
+              <rect x={xc(i) - bw / 2} y={y(0)} width={bw} height={Math.abs(y(x["Max drawdown"] ?? 0) - y(0))} rx="2" fill="#e39a0b" opacity="0.85" />
+              {x["Benchmark CAGR"] != null && <circle cx={xc(i)} cy={y(x["Benchmark CAGR"])} r="2.6" fill="#0f1c2e" />}
+              {i % every === 0 && (
+                <text x={xc(i)} y={H - pad.b + 16} textAnchor="middle" fontSize="11" fill="#74828f">
+                  {x.Start}
+                </text>
+              )}
+            </g>
+          ))}
+        </svg>
+        <div className="sweep-legend">
+          <span><i style={{ background: "#1f9a93" }} /> Annual return (CAGR)</span>
+          <span><i className="dot" /> Benchmark annual return</span>
+          <span><i style={{ background: "#e39a0b" }} /> Deepest fall</span>
+          {h && (
+            <span className="sweep-hover">
+              Start {h.Start}: {h.CAGR != null ? `${pct(h.CAGR)} a year` : `${pct(h["Total return"])} in ${h.Months} months`}, benchmark{" "}
+              {h["Benchmark CAGR"] != null ? pct(h["Benchmark CAGR"]) : pct(h["Benchmark total return"])}, deepest fall {pct(h["Max drawdown"])}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="log-scroll orders-table">
+        <table className="log">
+          <thead>
+            <tr>
+              <th scope="col">Start</th>
+              <th scope="col" className="num">Months</th>
+              <th scope="col" className="num">Annual return</th>
+              <th scope="col" className="num">Benchmark</th>
+              <th scope="col" className="num">Total return</th>
+              <th scope="col" className="num">Deepest fall</th>
+              <th scope="col">Fall from, to</th>
+              <th scope="col">Recovered by</th>
+              <th scope="col" className="num">Trades</th>
+              <th scope="col" className="num">Won</th>
+              <th scope="col" className="num">Avg invested</th>
+              <th scope="col" className="num">Bought at start</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((x) => (
+              <tr key={x.startKey}>
+                <th scope="row" className="stock-symbol">{x.Start}</th>
+                <td className="num">{x.Months}</td>
+                <td className={`num${x.CAGR < 0 ? " neg" : ""}`}>{pct(x.CAGR)}</td>
+                <td className="num">{pct(x["Benchmark CAGR"])}</td>
+                <td className={`num${x["Total return"] < 0 ? " neg" : ""}`}>{pct(x["Total return"])}</td>
+                <td className="num neg">{pct(x["Max drawdown"])}</td>
+                <td>{x["Drawdown peak"] ? `${x["Drawdown peak"]} to ${x["Drawdown low"]}` : "–"}</td>
+                <td>{x["Recovered by"] || "–"}</td>
+                <td className="num">{num(x.Trades, 0)}</td>
+                <td className="num">{pct(x["Win rate"], 0)}</td>
+                <td className="num">{pct(x["Avg invested"], 0)}</td>
+                <td className="num">
+                  {x["Stocks bought at start"]} of {r.settings.slots}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

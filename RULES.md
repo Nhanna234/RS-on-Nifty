@@ -26,7 +26,8 @@ Any other index that fails to download stops the run with a message.
 - Insurers, fund houses, brokers, exchanges, depositories, rating agencies, fintech, holding companies and investment companies are **not** lenders under this rule and stay in.
 - The Basic Industry is read from NSE's quote data, only for stocks whose broad sector is Financial Services, and kept for 30 days.
 - If NSE does not answer, these fallback rules decide instead, and the results say so: "Bank" in the company name; membership of NSE's Nifty NBFC index; housing-finance or lending words in the company name (excluding names with insurance, asset management, holding, exchange, depository, registrar, broking or securities); a short list of government financial institutions (see Parameters).
-- Your **Always exclude** and **Never exclude** symbol lists override everything above. They are remembered in your browser.
+- **And all other financial companies (tick box, off by default).** With it ticked, every company in NSE's Financial Services sector is left out, not only lenders: insurers, fund houses, brokers, exchanges, depositories, rating agencies, fintech, holding and investment companies too. It works in both tabs and in the start-month test (6.2).
+- Your **Always exclude** and **Never exclude** symbol lists override everything above. They are remembered in your browser. The Always exclude list removes any stock you name, financial or not (for example `DIACABS, CUPID`).
 - Every run lists the companies left out and the other financial companies kept, with the source of each decision.
 - For US stocks the industry in the stock list decides instead (for the Nasdaq 100, its ICB industry and subsector): a stock is a lender when that industry names a bank, a consumer or commercial lender, a mortgage lender or mortgage REIT, or a savings institution. The Nasdaq-100's own rules already leave out financial companies, so for that index the filter normally removes nothing; it matters for an uploaded US list. The Always and Never exclude lists work the same way.
 
@@ -142,9 +143,11 @@ A held stock is **never swapped** for a better candidate. It stays until a sell 
 
 ---
 
-## 6. Compare all indices
+## 6. Compare all indices and test every start month
 
-Runs the current backtest settings on all ten Nifty indices (the Nasdaq 100 is not included), for the chosen period and, if the chosen start is later, also from January 2015 to the same end. Each index is backtested on its own (ranking happens inside that index); the results equal single backtests of the same index. Each run is compared with the Nifty 50 and with the index's own value (its Total Return Index where available, otherwise its price index). Everything is written to one Excel workbook: summary, runs, settings, monthly values, trades and holdings.
+**6.1 Compare all indices.** Runs the current backtest settings on all ten Nifty indices (the Nasdaq 100 is not included), for the chosen period and, if the chosen start is later, also from January 2015 to the same end. Each index is backtested on its own (ranking happens inside that index); the results equal single backtests of the same index. Each run is compared with the Nifty 50 and with the index's own value (its Total Return Index where available, otherwise its price index). Everything is written to one Excel workbook: summary, runs, settings, monthly values, trades and holdings.
+
+**6.2 Test every start month.** Runs the current backtest settings once for every start month from the chosen start month to three months before the chosen end month, each run ending at the chosen end month. Each run starts fresh with all the money in cash, exactly like a single backtest with that start month (its numbers equal a single backtest's). It shows how much the result depends on when you start (see 9, "Start-date dependence"). Annual return (CAGR) is shown only for runs of 12 months or more; shorter runs show their total return. The deepest fall of each run is given with the month-end high it fell from, the low, and the month it was made good (or "Not yet"). The download is one zip file: a summary workbook (overview, one row per start month, calendar-year returns by start month, month-by-month values and drawdowns of every run) and each run's own workbook, the same file a single backtest gives.
 
 ---
 
@@ -183,6 +186,7 @@ These are recommendations for following the strategy with real money. The code d
 ## 9. Known limitations
 
 - **Survivorship bias.** Today's index members are used for every past month. Companies that collapsed or left the index are missing, which makes results look better than they were, most of all for small and micro caps. It is also large for the **Nasdaq 100**: the index is rebuilt every December, and today's list holds the companies that grew big enough to join it, so a long backtest on today's members picks past winners with hindsight.
+- **Start-date dependence.** The backtest never swaps a holding for a stronger stock and never trims winners, so what a run holds at any moment depends on what it bought earlier. Two runs with the same rules but different start months can therefore show very different returns for the same calendar year. Judge the strategy across many start months (6.2), not from one run.
 - **Currency.** Nasdaq 100 results are in US dollars. The rupee's move against the dollar, remittance costs and taxes on foreign shares are not modelled.
 - **Classification today.** The lending filter uses today's NSE classification for every past month.
 - **Data quality.** Yahoo Finance data for small and micro caps can have gaps or bad prices; only one-day reversals are removed.
@@ -258,11 +262,19 @@ The values the code uses. This section is generated from the code; the website a
 | Lending filter | US stocks: industry words treated as lending | bank(s), banking, consumer lending, consumer finance, mortgage, thrift, savings institution, specialty finance, commercial finance, credit services | lender_filter.py `US_LENDING_WORDS` |
 | Comparison | Universes compared | Nifty Total Market, Nifty 500, Nifty 50, Nifty 100, Nifty 200, Nifty LargeMidcap 250, Nifty Midcap 150, Nifty Smallcap 100, Nifty Smallcap 250, Nifty Microcap 250 | settings.py `COMPARE_ORDER` |
 | Comparison | Long period starts | 2015-01 | settings.py `LONG_START` |
+| Start-month test | Shortest run | 3 months | sweep.py `SWEEP_MIN_MONTHS` |
+| Start-month test | Annual return shown for runs of at least | 12 months | sweep.py `CAGR_MIN_MONTHS` |
+| Start-month test | Most start months in one test | 240 | sweep.py `MAX_SWEEP_RUNS` |
 <!-- parameters:end -->
 
 ---
 
 ## 12. Change log
+
+**22 Nov 2026**
+- Added "Test every start month" in the Backtest tab (6.2): the same settings run from every start month to one end month, with a summary and every run's Excel file in one zip.
+- Added the tick box "and all other financial companies" to the lending filter (1.4), to leave out the whole Financial Services sector.
+- Each backtest workbook's settings now also list whether other financial companies and your always-exclude stocks were left out. No change to the screener or backtest rules.
 
 **21 Nov 2026 (evening)**
 - The website now asks for a username and password. Accounts are kept in the app's Secrets in Streamlit Cloud (no database); passwords are stored only in scrambled form. No change to any screener or backtest rule.

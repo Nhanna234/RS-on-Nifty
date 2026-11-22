@@ -18,6 +18,7 @@ import bt_data
 import bt_engine
 import lender_filter
 import settings as S
+import sweep
 import us_universe
 
 RULES_PATH = Path(__file__).with_name("RULES.md")
@@ -99,6 +100,10 @@ def parameter_rows() -> list[tuple[str, str, str, str]]:
          "lender_filter.py `US_LENDING_WORDS`"),
         ("Comparison", "Universes compared", ", ".join(S.COMPARE_ORDER), "settings.py `COMPARE_ORDER`"),
         ("Comparison", "Long period starts", S.LONG_START, "settings.py `LONG_START`"),
+        ("Start-month test", "Shortest run", f"{sweep.SWEEP_MIN_MONTHS} months", "sweep.py `SWEEP_MIN_MONTHS`"),
+        ("Start-month test", "Annual return shown for runs of at least", f"{sweep.CAGR_MIN_MONTHS} months",
+         "sweep.py `CAGR_MIN_MONTHS`"),
+        ("Start-month test", "Most start months in one test", sweep.MAX_SWEEP_RUNS, "sweep.py `MAX_SWEEP_RUNS`"),
     ]
 
 
