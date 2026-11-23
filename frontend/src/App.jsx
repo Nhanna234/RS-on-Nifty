@@ -172,6 +172,7 @@ function Controls({ indices, defaults, running, onRun }) {
         useEma: Boolean(s.useEma),
         cr: clamp(s.cr, 0, 100, 75),
         mr: clamp(s.mr, 0, 100, 5),
+        rsChange: clamp(s.rsChange, -100, 100, 5),
         weekly: Boolean(s.weekly),
         ...lend,
       },
@@ -230,6 +231,12 @@ function Controls({ indices, defaults, running, onRun }) {
       <div className="field">
         <label htmlFor="f-mr">Min monthly return %</label>
         <input id="f-mr" type="number" min="0" max="100" value={s.mr} onChange={set("mr")} />
+      </div>
+      <div className="field">
+        <label htmlFor="f-rsch" title="This month's RS (% of its 12-month high) minus last month's, in points. -100 switches it off.">
+          Min RS change vs last month
+        </label>
+        <input id="f-rsch" type="number" min="-100" max="100" step="0.5" value={s.rsChange ?? 5} onChange={set("rsChange")} />
       </div>
 
       <div className="field field-switches">
@@ -327,6 +334,7 @@ function Results({ result, dimmed }) {
     const bySymbol = (a, b) => a.symbol.localeCompare(b.symbol);
     if (sort === "streak") rows.sort((a, b) => b.streak - a.streak || b.hits - a.hits || bySymbol(a, b));
     else if (sort === "return") rows.sort((a, b) => (b.monthReturn ?? -1e9) - (a.monthReturn ?? -1e9));
+    else if (sort === "rsChange") rows.sort((a, b) => (b.rsChange ?? -1e9) - (a.rsChange ?? -1e9));
     else if (sort === "symbol") rows.sort(bySymbol);
     else rows.sort((a, b) => a.sector.localeCompare(b.sector) || bySymbol(a, b));
     return rows;
@@ -446,6 +454,7 @@ function Results({ result, dimmed }) {
                 <option value="sector">Sector</option>
                 <option value="streak">Longest run</option>
                 <option value="return">Month return</option>
+                <option value="rsChange">RS change</option>
                 <option value="symbol">Symbol</option>
               </select>
             </label>
@@ -589,7 +598,7 @@ function SectorPanel({ sectors, active, onPick, total }) {
 
 /* ---------- the RS matrix ---------- */
 function Matrix({ rows, months, grouped, inProgress, showWeekly, currency, openSymbol, onToggle }) {
-  const span = 1 + months.length + 4 + (showWeekly ? 3 : 0);
+  const span = 1 + months.length + 5 + (showWeekly ? 3 : 0);
   const body = [];
   let lastSector = null;
   rows.forEach((s) => {
@@ -642,6 +651,7 @@ function Matrix({ rows, months, grouped, inProgress, showWeekly, currency, openS
         <td className="col-spark">
           <Spark values={s.trail.rs} />
         </td>
+        <td className={`col-num${s.rsChange < 0 ? " neg" : ""}`}>{s.rsChange == null ? "–" : `${s.rsChange > 0 ? "+" : ""}${num(s.rsChange, 1)}`}</td>
         <td className={`col-num${s.monthReturn < 0 ? " neg" : ""}`}>{signedPct(s.monthReturn)}</td>
         <td className="col-range">
           <span className="range" title="Where the latest price sits between this month's low and high">
@@ -688,6 +698,9 @@ function Matrix({ rows, months, grouped, inProgress, showWeekly, currency, openS
             </th>
             <th scope="col" className="col-spark">
               RS, 24 months
+            </th>
+            <th scope="col" className="col-num" title="This month's RS minus last month's, in points (RS as % of its 12-month high)">
+              RS change
             </th>
             <th scope="col" className="col-num">
               Month

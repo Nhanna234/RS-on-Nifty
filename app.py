@@ -34,7 +34,7 @@ for _mod in (settings, auth, bt_data, bt_engine, lender_filter, compare, sweep, 
         _mod._loaded_mtime = _mtime
 
 from settings import (BT_DEFAULTS, COMPARE_ORDER, DEFAULT_INDEX, INDEX_FILES, LONG_START, LOOKBACK_MONTHS,  # noqa: E402
-                      MARKETS, RS_TRAIL_MONTHS, SCREENER_DEFAULTS, SCREENER_PRICE_PERIOD, US_INDICES,
+                      MARKETS, RS_CHANGE_OFF, RS_TRAIL_MONTHS, SCREENER_DEFAULTS, SCREENER_PRICE_PERIOD, US_INDICES,
                       WEEKLY_CR_REQ, WEEKLY_RET_REQ, market_of)
 
 ALL_INDICES = list(INDEX_FILES) + list(US_INDICES)
@@ -216,11 +216,12 @@ def read_uploaded_universe(files, clean=clean_symbol):
 # --- RS LOGIC ENGINE ---
 class RSHeatmapScreener:
     def __init__(self, rs_threshold, lookback_months, output_history, use_ema, cr_threshold, mr_threshold,
-                 market="IN"):
+                 market="IN", rs_change_min=RS_CHANGE_OFF):
         self.rs_threshold = rs_threshold / 100.0
         self.lookback_months = lookback_months
         self.output_history = output_history
         self.market = market
+        self.rs_change_min = rs_change_min                  # points; at or below RS_CHANGE_OFF the filter is off
         self.index_ticker = MARKETS[market]["rs_index"]     # Nifty 50, or the S&P 500 for US universes
         self.suffix = MARKETS[market]["yahoo_suffix"]       # ".NS" for NSE stocks on Yahoo, "" for US stocks
         self.exchange = MARKETS[market]["exchange"]
@@ -283,6 +284,11 @@ class RSHeatmapScreener:
             mr_val = (curr_price / prev_price) - 1
             if (mr_val * 100) < self.mr_threshold: continue
 
+            # RS change: this month's RS (% of its 12-month high) minus last month's, in points
+            if self.rs_change_min > RS_CHANGE_OFF:
+                change = rs_change_points(stock_prices[ticker], index_prices, self.lookback_months)
+                if change is None or change < self.rs_change_min: continue
+
             # Extract mapping details safely
             sector = sector_map.get(clean_name, {}).get("Sector", "N/A")
             isin_val = sector_map.get(clean_name, {}).get("ISIN", "")
@@ -312,6 +318,24 @@ class RSHeatmapScreener:
                 matrix_data.append(row)
         
         return pd.DataFrame(matrix_data), month_headers
+
+def rs_pct_of_high(rs, i, n):
+    """RS at position i as % of its highest value over the n month-ends ending there (None without n months)."""
+    if i < n or i >= len(rs):
+        return None
+    return float(rs.iloc[i] / rs.iloc[i - n + 1: i + 1].max() * 100)
+
+
+def rs_change_points(prices, index_prices, n):
+    """Latest month's RS % of its 12-month high minus the previous month's, in points (86 - 78 = 8).
+    None if either month is missing or lacks 12 months of history."""
+    rs = (prices / index_prices)
+    if len(rs) < 2 or pd.isna(rs.iloc[-1]) or pd.isna(rs.iloc[-2]):
+        return None
+    rs = rs.dropna()
+    now, before = rs_pct_of_high(rs, len(rs) - 1, n), rs_pct_of_high(rs, len(rs) - 2, n)
+    return None if now is None or before is None else now - before
+
 
 # --- RESULT BUILDER (prepares everything the React dashboard shows) ---
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -442,6 +466,7 @@ def describe_stocks(screener, monthly_data, matrix_df, month_headers, tv_prefix=
             "hits": sum(1 for c in cells if c["q"]),
             "price": _num(curr),
             "monthReturn": _num((curr / prev - 1) * 100, 1),
+            "rsChange": _num(rs_change_points(px, index_prices, n), 1),
             "closingRange": _num((curr - lo) / (hi - lo) * 100, 0) if hi != lo else 0,
             "emaGap": _num((curr / ema_12 - 1) * 100, 1),
             "trail": {
@@ -516,6 +541,7 @@ def run_screen(req):
     use_ema = bool(req.get("useEma", True))
     cr_limit = float(req.get("cr", 75))
     mr_limit = float(req.get("mr", 5))
+    rs_change_min = min(100.0, max(float(RS_CHANGE_OFF), float(req.get("rsChange", SCREENER_DEFAULTS["rsChange"]))))
     enable_weekly = bool(req.get("weekly", False))
 
     # 1. universe: an uploaded list replaces the index
@@ -527,7 +553,8 @@ def run_screen(req):
     market = universe["market"]
 
     # 2. the RS engine (unchanged; for US stocks the RS index is the S&P 500)
-    screener = RSHeatmapScreener(cutoff, LOOKBACK_MONTHS, history, use_ema, cr_limit, mr_limit, market)
+    screener = RSHeatmapScreener(cutoff, LOOKBACK_MONTHS, history, use_ema, cr_limit, mr_limit, market,
+                                 rs_change_min)
     symbols = sorted(set(all_symbols))
     unique_tickers = [f"{s}{screener.suffix}" for s in symbols]
     monthly_data = screener.fetch_data(unique_tickers, interval="1mo")
@@ -550,7 +577,7 @@ def run_screen(req):
         "months": month_headers,
         "monthInProgress": (last_month.year, last_month.month) == (market_today.year, market_today.month),
         "settings": {"history": history, "threshold": cutoff, "useEma": use_ema, "cr": cr_limit,
-                     "mr": mr_limit, "weekly": enable_weekly},
+                     "mr": mr_limit, "rsChange": rs_change_min, "weekly": enable_weekly},
         "sectorTotals": dict(Counter(sector_map[s]["Sector"] for s in symbols)),
         "stocks": [],
         "excel": None,
