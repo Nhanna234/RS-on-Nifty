@@ -67,12 +67,9 @@ All other rules (sections 2 to 5 and 7) are the same as for the Nifty indices.
 **3.2 Latest-month filters.** A stock is considered only if, on the **latest month in the data**, it passes all switched-on filters:
 - close at or above its 12-month EMA (switch);
 - closing range at or above the minimum;
-- monthly return at or above the minimum;
-- **RS change vs last month** at or above the minimum (default 5 points). The RS change is the latest month's RS (as % of its 12-month high, the number in the month cells) minus the previous month's, in points: RS 78 last month and 86 this month is a change of 8, which passes a minimum of 5 or 7. It is worked out from the unrounded values, so it can differ by up to one point from subtracting the two numbers shown in the cells. A stock needs 13 month-ends of history for it; without them it is left out while the filter is on. Set the minimum to −100 to switch the filter off.
+- monthly return at or above the minimum.
 
 The latest month is usually the running month, so these filters are provisional until the month ends.
-
-Note on the RS change filter: a stock at a new 12-month RS high in both months (100 and 100) has a change of 0, so any minimum above 0 leaves out stocks that stay at their highs. The filter favours stocks that are **improving**, not stocks that are already strongest.
 
 **3.3 The month cells.** For each of the months shown, the stock's RS ratio is computed:
 - 100%: a new 12-month RS high (dark cell, shown as 100);
@@ -83,7 +80,7 @@ Note on the RS change filter: a stock at a new 12-month RS high in both months (
 
 **3.5 Weekly drill-down (switch, off by default).** Keeps only listed stocks whose latest week's return is above 4% **and** whose latest week's closing range is above 75% (strictly above). The latest day's closing range and change are shown for information only; they do not filter.
 
-**3.6 Run, RS change, Close in range and the RS line.** "Run" counts consecutive marked months ending at the latest month. "RS change" is the latest month's change in points (3.2). "Close in range" is the latest month's closing range. The RS line shows 24 months, starting at 100.
+**3.6 Run, Close in range and the RS line.** "Run" counts consecutive marked months ending at the latest month. "Close in range" is the latest month's closing range. The RS line shows 24 months, starting at 100.
 
 ---
 
@@ -205,7 +202,6 @@ These are recommendations for following the strategy with real money. The code d
 |---|---|---|
 | Month used for the filters | The latest month, usually still running | Completed months only |
 | RS rule | Marked if at a 12-month high or at/above the threshold, in any shown month | At a 12-month high, or at/above the threshold **and** higher than 2 month-ends earlier |
-| RS change filter | Yes: latest month's RS minus last month's, at least the minimum (default 5 points) | No |
 | Ranking | None (sorted for display) | Closing range (or chosen ranking), then RS ratio, then monthly return |
 | History needed | 13 month-ends | 12 month-ends |
 | Prices | 3 years of Yahoo monthly prices | Daily prices from 2010, cleaned, turned into monthly candles |
@@ -235,7 +231,6 @@ The values the code uses. This section is generated from the code; the website a
 | Screener | Price above 12-month EMA | On | settings.py `SCREENER_DEFAULTS` |
 | Screener | Minimum closing range | 75% | settings.py `SCREENER_DEFAULTS` |
 | Screener | Minimum monthly return | 5% | settings.py `SCREENER_DEFAULTS` |
-| Screener | Minimum RS change vs last month | 5 points (off at -100 or below) | settings.py `SCREENER_DEFAULTS`, `RS_CHANGE_OFF` |
 | Screener | Weekly drill-down | Off | settings.py `SCREENER_DEFAULTS` |
 | Screener | Weekly drill-down: latest week's return above | 4% | settings.py `WEEKLY_RET_REQ` |
 | Screener | Weekly drill-down: latest week's closing range above | 75% | settings.py `WEEKLY_CR_REQ` |
@@ -275,9 +270,6 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 12. Change log
-
-**23 Nov 2026**
-- Screener: new filter **Min RS change vs last month** (3.2), default 5 points: the latest month's RS (% of its 12-month high) minus the previous month's. The results show the change for each stock and can be sorted by it. With the default of 5, fewer stocks are listed than before, and stocks that stay at 100 both months are left out. Set it to −100 to switch it off. The backtest is unchanged.
 
 **22 Nov 2026**
 - Added "Test every start month" in the Backtest tab (6.2): the same settings run from every start month to one end month, with a summary and every run's Excel file in one zip.

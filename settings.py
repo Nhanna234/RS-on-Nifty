@@ -38,14 +38,13 @@ def market_of(index_name):
 
 
 # ---- screener
-SCREENER_DEFAULTS = {"index": DEFAULT_INDEX, "history": 6, "threshold": 100, "useEma": True, "cr": 75, "mr": 5, "rsChange": 5,
+SCREENER_DEFAULTS = {"index": DEFAULT_INDEX, "history": 6, "threshold": 100, "useEma": True, "cr": 75, "mr": 5,
                      "weekly": False, "excludeLenders": True}
 LOOKBACK_MONTHS = 12          # RS is compared with its highest month-end value of the past 12 months
 SCREENER_PRICE_PERIOD = "3y"  # monthly prices downloaded for the screener
 RS_TRAIL_MONTHS = 24          # length of the RS line drawn for each stock
 WEEKLY_RET_REQ = 4            # weekly drill-down: latest week's return must be above this %
 WEEKLY_CR_REQ = 75            # weekly drill-down: latest week's closing range must be above this %
-RS_CHANGE_OFF = -100           # a minimum RS change at or below this switches the RS-change filter off
 RS_INDEX_TICKER = MARKETS["IN"]["rs_index"]  # Nifty 50 price index on Yahoo: the denominator of relative strength
 
 # ---- backtest

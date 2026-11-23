@@ -60,8 +60,6 @@ def parameter_rows() -> list[tuple[str, str, str, str]]:
         ("Screener", "Price above 12-month EMA", _yes(sd["useEma"]), "settings.py `SCREENER_DEFAULTS`"),
         ("Screener", "Minimum closing range", _pct(sd["cr"]), "settings.py `SCREENER_DEFAULTS`"),
         ("Screener", "Minimum monthly return", _pct(sd["mr"]), "settings.py `SCREENER_DEFAULTS`"),
-        ("Screener", "Minimum RS change vs last month", f"{sd['rsChange']} points (off at {S.RS_CHANGE_OFF} or below)",
-         "settings.py `SCREENER_DEFAULTS`, `RS_CHANGE_OFF`"),
         ("Screener", "Weekly drill-down", _yes(sd["weekly"]), "settings.py `SCREENER_DEFAULTS`"),
         ("Screener", "Weekly drill-down: latest week's return above", _pct(S.WEEKLY_RET_REQ), "settings.py `WEEKLY_RET_REQ`"),
         ("Screener", "Weekly drill-down: latest week's closing range above", _pct(S.WEEKLY_CR_REQ), "settings.py `WEEKLY_CR_REQ`"),
