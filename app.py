@@ -34,7 +34,7 @@ for _mod in (settings, auth, bt_data, bt_engine, lender_filter, compare, sweep, 
         _mod._loaded_mtime = _mtime
 
 from settings import (BT_DEFAULTS, COMPARE_ORDER, DEFAULT_INDEX, INDEX_FILES, LONG_START, LOOKBACK_MONTHS,  # noqa: E402
-                      MARKETS, RS_TRAIL_MONTHS, SCREENER_DEFAULTS, SCREENER_PRICE_PERIOD, US_INDICES,
+                      LOGIN_REQUIRED, MARKETS, RS_TRAIL_MONTHS, SCREENER_DEFAULTS, SCREENER_PRICE_PERIOD, US_INDICES,
                       WEEKLY_CR_REQ, WEEKLY_RET_REQ, market_of)
 
 ALL_INDICES = list(INDEX_FILES) + list(US_INDICES)
@@ -1039,7 +1039,10 @@ def signed_in_user():
     return user, cfg
 
 
-current_user, login_cfg = signed_in_user()
+if LOGIN_REQUIRED:
+    current_user, login_cfg = signed_in_user()
+else:                                   # sign-in switched off in settings.py: everyone goes straight in
+    current_user, login_cfg = None, {"users": {}, "admins": set(), "secret": ""}
 
 rs_dashboard = components.declare_component("rs_dashboard", path=str(FRONTEND_DIR))
 
@@ -1059,10 +1062,10 @@ request = rs_dashboard(
     rulesMd=rules_doc.rules_for_app(),
     cmpResult=st.session_state.get("cmp_result"),
     sweepResult=st.session_state.get("sweep_result"),
-    user={"name": current_user, "admin": current_user in login_cfg["admins"],
-          # a new "keep me signed in" cookie for the dashboard to store; "" removes it
-          "token": st.session_state.get("new_token"), "cookie": auth.COOKIE_NAME,
-          "days": auth.REMEMBER_DAYS},
+    user=({"name": current_user, "admin": current_user in login_cfg["admins"],
+           # a new "keep me signed in" cookie for the dashboard to store; "" removes it
+           "token": st.session_state.get("new_token"), "cookie": auth.COOKIE_NAME,
+           "days": auth.REMEMBER_DAYS} if current_user else None),
     key="rs_dashboard",
     default=None,
 )

@@ -16,6 +16,6 @@ Adjustable values belong in `settings.py` (or a named constant in the module tha
 
 - `data/nasdaq100.csv` is the fallback Nasdaq-100 list used when Nasdaq and Wikipedia do not answer; refresh it (and `SNAPSHOT_DATE` in `us_universe.py`) after an index change.
 - After changing `frontend/src`, run `cd frontend && npm install && npm run build` and commit `frontend/dist`.
-- Sign-in: `auth.py` (password hashing, lockout, the "keep me signed in" cookie) and the sign-in pages in `app.py`. Accounts live in the app's Secrets under `[login]` (locally `.streamlit/secrets.toml`, which is git-ignored and must never be committed). With no accounts configured the site stays locked and shows a setup page.
+- Sign-in: `auth.py` (password hashing, lockout, the "keep me signed in" cookie) and the sign-in pages in `app.py`. Accounts live in the app's Secrets under `[login]` (locally `.streamlit/secrets.toml`, which is git-ignored and must never be committed). With no accounts configured the site stays locked and shows a setup page. Sign-in is currently switched off (`LOGIN_REQUIRED = False` in `settings.py`); set it to `True` to bring it back.
 - `auth.py`, `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py`, `sweep.py`, `us_universe.py`, `settings.py` and `rules_doc.py` have no Streamlit imports and can be tested on their own.
 - Ali is new to coding: explain changes in plain language.

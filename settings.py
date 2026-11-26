@@ -20,6 +20,7 @@ INDEX_FILES = {                      # NSE Indices constituent files
     "Nifty Total Market": "ind_niftytotalmarket_list.csv",
 }
 DEFAULT_INDEX = "Nifty Total Market"
+LOGIN_REQUIRED = False          # True brings back the sign-in page (accounts in the app's Secrets, see auth.py)
 US_INDICES = ["Nasdaq 100"]          # US universes; their lists come from us_universe.py
 
 # ---- markets: what changes between an Indian and a US universe

@@ -301,6 +301,7 @@ The values the code uses. This section is generated from the code; the website a
 ## 12. Change log
 
 **26 Nov 2026**
+- The website no longer asks for a username and password (sign-in switched off). No change to any rule.
 - Backtest: new entry rule **Setup A + B** (4.12): buy a stock the first time in 12 months it closes within 5% of its 12-month highest close with RS of at least the threshold (Setup A), or later when it pulls back to its 12-month EMA and bounces while on the signals list (Setup B). Setup A holds at most 7 of 10 stocks; Setup B fills the rest. The RS rule stays the default; nothing changes unless you choose the new rule.
 
 **22 Nov 2026**
