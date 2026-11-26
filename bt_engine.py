@@ -30,7 +30,7 @@ EMA_SPAN = 12
 AT_HIGH = 1 - 1e-9
 MIN_ALLOC_FRAC = 0.20       # skip a buy if less than 20% of a slot's money is left in cash
 SPIKE_FACTOR = 1.6          # a one-day move of this size that fully reverses next day is a bad price
-ENTRY_RULES = {"rs": "RS rule", "breakout": "Setup A + B: breakout near the 12-month high, then pullback to the EMA"}
+ENTRY_RULES = {"rs": "RS rule", "breakout": "Setup A: first close near the 12-month high, with a second chance after a pause"}
 HIGH_WINDOW = 12            # months in "12-month highest close" (Setup A)
 RANKINGS = {"cr": "Closing range", "ret6": "6-month return", "ret12": "12-month return"}
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -97,7 +97,7 @@ def indicators(m: dict, rs_index: pd.Series) -> dict:
     ratio = rs / rs.rolling(LOOKBACK, min_periods=LOOKBACK).max()
     ema = C.ewm(span=EMA_SPAN, adjust=False).mean().where(C.notna())
     return {
-        "C": C, "L": L,
+        "C": C,
         "ratio": ratio,
         "ratio2": ratio.shift(2),
         "ema": ema,
@@ -124,78 +124,71 @@ def eligible(ind: dict, p: dict, need_next_open: bool = True) -> pd.DataFrame:
 
 
 def setup_signals(ind: dict, p: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Setup A and Setup B at each month-end (RULES.md 4.12). Neither depends on what the portfolio holds.
+    """Setup A and its second chance at each month-end (RULES.md 4.12). Neither depends on what the portfolio
+    holds or whether slots were full.
 
     Setup A (fresh breakout): close >= near_high x the highest close of the last HIGH_WINDOW month-ends, for the
     first time in `quiet` month-ends; RS >= threshold; the usual EMA, closing-range and monthly-return filters.
-    Signals list: every Setup A stock joins it; it stays while each month-end close is above the 12-month EMA,
-    for up to `list_life` months.
-    Setup B (pullback): a list member (joined in an earlier month) whose month low is below band x the month's
-    12-month EMA, closing above the EMA, closing range and monthly return >= their minimums and RS >= threshold."""
-    key = ("_setups", p["near_high"], p["quiet"], p["band"], p["list_life"], p["threshold"], p["cr_min"],
+    Second chance: within `window` months of its Setup A, a stock whose close has fallen below reset x its
+    12-month highest close at some month-end since its last signal, and that now closes >= near_high x that high
+    again with the same RS, EMA, closing-range and monthly-return filters."""
+    key = ("_setups", p["near_high"], p["quiet"], p["reset"], p["window"], p["threshold"], p["cr_min"],
            p["mr_min"], p["use_ema"])
     if key in ind:
         return ind[key]
-    C, L, ema, ratio, cr, ret = ind["C"], ind["L"], ind["ema"], ind["ratio"], ind["cr"], ind["ret"]
+    C, ema, ratio, cr, ret = ind["C"], ind["ema"], ind["ratio"], ind["cr"], ind["ret"]
     high = C.rolling(HIGH_WINDOW, min_periods=HIGH_WINDOW).max()
     near = (C >= p["near_high"] * high).astype(float).where(high.notna() & C.notna())
     quiet = int(p["quiet"])
     before = near.shift(1).rolling(quiet, min_periods=quiet).max()        # NaN without full history
-    first = (near == 1) & (before == 0)
-    a = first & (ratio >= p["threshold"]) & (cr * 100 >= p["cr_min"]) & (ret * 100 >= p["mr_min"])
+    strong = (ratio >= p["threshold"]) & (cr * 100 >= p["cr_min"]) & (ret * 100 >= p["mr_min"])
     if p["use_ema"]:
-        a &= C >= ema
-    a = a.fillna(False)
-    cond_b = ((L < p["band"] * ema) & (C > ema) & (cr * 100 >= p["cr_min"]) & (ret * 100 >= p["mr_min"])
-              & (ratio >= p["threshold"])).fillna(False)
+        strong &= C >= ema
+    a = ((near == 1) & (before == 0) & strong).fillna(False)
+    again = ((near == 1) & strong).fillna(False)
+    below = (C < p["reset"] * high).fillna(False)                            # the pause that re-arms it
 
-    av, cv, ev = a.values, C.values, ema.values
-    member = np.zeros(av.shape, dtype=bool)
-    on_list = np.zeros(av.shape[1], dtype=bool)
-    since = np.full(av.shape[1], -10 ** 6)
-    life = int(p["list_life"])
-    with np.errstate(invalid="ignore"):
-        for i in range(av.shape[0]):
-            mem = on_list & (i - since <= life)
-            member[i] = mem
-            still = mem & (cv[i] > ev[i])
-            since = np.where(av[i], i, since)
-            on_list = still | av[i]
-    b = cond_b & pd.DataFrame(member, index=C.index, columns=C.columns) & ~a
-    ind[key] = (a, b)
-    return a, b
+    av, gv, bv = a.values, again.values, below.values
+    second = np.zeros(av.shape, dtype=bool)
+    last_a = np.full(av.shape[1], -10 ** 6)
+    armed = np.zeros(av.shape[1], dtype=bool)
+    window = int(p["window"])
+    for i in range(av.shape[0]):
+        second[i] = (i - last_a <= window) & armed & gv[i] & ~av[i]
+        last_a = np.where(av[i], i, last_a)
+        armed = np.where(av[i] | second[i], False, armed) | bv[i]
+    c = pd.DataFrame(second, index=C.index, columns=C.columns)
+    ind[key] = (a, c)
+    return a, c
 
 
 def entry_signals(ind: dict, p: dict, need_next_open: bool = True) -> dict:
-    """{"RS": eligible} for the RS rule, {"A": ..., "B": ...} for Setup A + B."""
+    """{"RS": eligible} for the RS rule, {"A": ..., "C": ...} for Setup A with its second chance."""
     if p.get("entry", "rs") != "breakout":
         return {"RS": eligible(ind, p, need_next_open)}
-    a, b = setup_signals(ind, p)
+    a, c = setup_signals(ind, p)
     if need_next_open:
         ok = ind["exec_px"].notna() & (ind["exec_px"] > 0)
-        a, b = a & ok, b & ok
-    return {"A": a, "B": b if p.get("use_b", True) else b & False}
+        a, c = a & ok, c & ok
+    return {"A": a, "C": c if p.get("second", True) else c & False}
 
 
 def entry_picks(sig: dict, ind: dict, p: dict, t: pd.Period, held: dict, free: int,
                 exclude=()) -> tuple[list, list]:
     """Stocks to buy at the next open, in order, as (symbol, setup) pairs, plus every qualifying stock in
     order (for reserves and counts). held: {symbol: setup} after this month's exits; exclude: other symbols
-    that may not be bought (the ones being sold).
-    Setup A + B: Setup A may hold up to a_slots stocks; Setup B fills the remaining free slots."""
+    that may not be bought (the ones being sold). Setup A and second-chance stocks share one ranking."""
     free = max(0, free)
     skip = set(held) | set(exclude)
-    if "RS" in sig:
-        ranked = rank(ind, p, t, [s for s in sig["RS"].columns[sig["RS"].loc[t].values] if s not in skip])
-        return [(s, "RS") for s in ranked[:free]], [(s, "RS") for s in ranked]
-    ra = rank(ind, p, t, [s for s in sig["A"].columns[sig["A"].loc[t].values] if s not in skip])
-    rb = rank(ind, p, t, [s for s in sig["B"].columns[sig["B"].loc[t].values] if s not in skip])
-    a_cap = min(int(p["a_slots"]), int(p["slots"])) if p.get("use_b", True) else int(p["slots"])
-    n_a = min(free, max(0, a_cap - sum(1 for v in held.values() if v == "A")), len(ra))
-    picks = [(s, "A") for s in ra[:n_a]] + [(s, "B") for s in rb[:free - n_a]]
-    chosen = {s for s, _ in picks}
-    rest = [(s, "A") for s in ra if s not in chosen] + [(s, "B") for s in rb if s not in chosen]
-    return picks, picks + rest
+    kind = {}
+    for k in ("RS", "A", "C"):
+        if k in sig:
+            for s in sig[k].columns[sig[k].loc[t].values]:
+                if s not in skip:
+                    kind.setdefault(s, k)
+    ranked = rank(ind, p, t, list(kind))
+    qualified = [(s, kind[s]) for s in ranked]
+    return qualified[:free], qualified
 
 
 def exit_reason(ind: dict, p: dict, t: pd.Period, s: str) -> str | None:
@@ -561,7 +554,7 @@ def build_report(sim: dict, bench: pd.Series, p: dict, start: pd.Period, end: pd
 
     by_setup = {}
     if p.get("entry", "rs") == "breakout":
-        for k in ("A", "B"):
+        for k in ("A", "C"):
             tk = [t for t in sim["trades"] if t.get("setup") == k]
             closed = [t for t in tk if not t["open"]]
             rets = [t["ret"] for t in closed]

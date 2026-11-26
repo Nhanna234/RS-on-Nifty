@@ -36,9 +36,9 @@ function axisRupees(v) {
   return `₹${Math.round(v).toLocaleString("en-IN")}`;
 }
 function SetupTag({ k }) {
-  if (k !== "A" && k !== "B") return null;
+  if (k !== "A" && k !== "C") return null;
   return (
-    <span className={`setup-tag setup-${k}`} title={k === "A" ? "Setup A: fresh breakout near the 12-month high" : "Setup B: pullback to the 12-month EMA"}>
+    <span className={`setup-tag setup-${k}`} title={k === "A" ? "Setup A: first close near the 12-month high in 12 months" : "Second chance: back near the 12-month high after a pause"}>
       {k}
     </span>
   );
@@ -173,10 +173,9 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         entry: s.entry === "breakout" ? "breakout" : "rs",
         nearHigh: n(s.nearHigh, 50, 100, 95),
         quiet: Math.round(n(s.quiet, 1, 36, 12)),
-        aSlots: Math.round(n(s.aSlots, 0, 50, 7)),
-        useB: s.useB !== false,
-        band: n(s.band, 0, 50, 2),
-        listLife: Math.round(n(s.listLife, 1, 36, 12)),
+        second: s.second !== false,
+        reset: n(s.reset, 50, 100, 95),
+        window: Math.round(n(s.window, 1, 36, 12)),
         ...lend,
       };
   };
@@ -247,7 +246,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         <label htmlFor="b-entry">Entry rule</label>
         <select id="b-entry" value={s.entry || "rs"} onChange={set("entry")}>
           <option value="rs">RS rule</option>
-          <option value="breakout">Setup A + B (breakout, then pullback)</option>
+          <option value="breakout">Setup A + second chance</option>
         </select>
       </div>
       {breakout && (
@@ -261,29 +260,26 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
             <input id="b-quiet" type="number" min="1" max="36" value={s.quiet} onChange={set("quiet")} />
           </div>
           <div className="field">
-            <label htmlFor="b-aslots" title="Setup A may hold at most this many stocks; Setup B fills the free slots that are left">Slots for Setup A</label>
-            <input id="b-aslots" type="number" min="0" max="50" value={s.aSlots} onChange={set("aSlots")} disabled={s.useB === false} />
+            <label htmlFor="b-reset" title="Second chance: after Setup A, the stock must close below this % of its 12-month highest close at some month-end (a pause) before it can be bought again">Pause: close below % of high</label>
+            <input id="b-reset" type="number" min="50" max="100" step="0.5" value={s.reset} onChange={set("reset")} disabled={s.second === false} />
           </div>
           <div className="field">
-            <label htmlFor="b-band" title="Setup B: the month's low came within this % of the 12-month EMA (or below it)">Pullback within % of EMA</label>
-            <input id="b-band" type="number" min="0" max="50" step="0.5" value={s.band} onChange={set("band")} disabled={s.useB === false} />
-          </div>
-          <div className="field">
-            <label htmlFor="b-life" title="Months a Setup A stock stays on the signals list (while it closes above the 12-month EMA)">Signals list life (months)</label>
-            <input id="b-life" type="number" min="1" max="36" value={s.listLife} onChange={set("listLife")} disabled={s.useB === false} />
+            <label htmlFor="b-window" title="Second chance: only within this many months of the stock's Setup A">Second chance within (months)</label>
+            <input id="b-window" type="number" min="1" max="36" value={s.window} onChange={set("window")} disabled={s.second === false} />
           </div>
           <div className="field field-switches">
             <label className="switch">
-              <input type="checkbox" checked={s.useB !== false} onChange={set("useB")} />
+              <input type="checkbox" checked={s.second !== false} onChange={set("second")} />
               <span className="switch-track" aria-hidden="true" />
-              Use Setup B (pullback)
+              Use second chance
             </label>
           </div>
           <p className="hint setup-hint">
             Setup A: close at least {s.nearHigh}% of the 12-month highest close for the first time in {s.quiet} months, RS at least
-            the threshold, plus the EMA, closing range and monthly return filters. Setup B: a Setup A stock still on the signals
-            list whose month low came within {s.band}% of the 12-month EMA, closing above it, closing range and monthly return at least their minimums, and RS
-            at least the threshold. {s.useB === false ? "Setup B is off: Setup A may use every slot." : `Setup A holds at most ${s.aSlots} of ${s.slots} stocks; Setup B fills the free slots left.`}
+            the threshold, plus the EMA, closing range and monthly return filters.{" "}
+            {s.second === false
+              ? "Second chance is off: a stock missed because slots were full waits for its next Setup A."
+              : `Second chance: within ${s.window} months of its Setup A, a stock that has closed below ${s.reset}% of its 12-month highest close at a month-end and now closes at least ${s.nearHigh}% of it again, with the same RS and filters, can be bought. Every stock gets this, bought before or not.`}
           </p>
         </div>
       )}
@@ -1366,10 +1362,10 @@ function TradeStats({ t, bySetup }) {
               </tr>
             </thead>
             <tbody>
-              {["A", "B"].map((k) => (
+              {["A", "C"].map((k) => (
                 <tr key={k}>
                   <th scope="row">
-                    <SetupTag k={k} /> {k === "A" ? "Fresh breakout" : "Pullback to EMA"}
+                    <SetupTag k={k} /> {k === "A" ? "Setup A" : "Second chance"}
                   </th>
                   <td className="num">{num(bySetup[k].trades, 0)}</td>
                   <td className="num">{pct(bySetup[k].winRate, 0)}</td>

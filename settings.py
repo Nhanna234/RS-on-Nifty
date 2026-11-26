@@ -52,8 +52,8 @@ RS_INDEX_TICKER = MARKETS["IN"]["rs_index"]  # Nifty 50 price index on Yahoo: th
 BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 98, "useEma": True,
                "cr": 75, "mr": 5, "cost": 0.2, "cashYield": 6, "capital": 1000000, "ranking": "cr",
                "excludeLenders": True,
-               # entry rule: "rs" (the RS rule) or "breakout" (Setup A + B, RULES.md 4.12)
-               "entry": "rs", "nearHigh": 95, "quiet": 12, "aSlots": 7, "useB": True, "band": 2, "listLife": 12}
+               # entry rule: "rs" (the RS rule) or "breakout" (Setup A with its second chance, RULES.md 4.12)
+               "entry": "rs", "nearHigh": 95, "quiet": 12, "second": True, "reset": 95, "window": 12}
 
 # ---- all-index comparison
 COMPARE_ORDER = ["Nifty Total Market", "Nifty 500", "Nifty 50", "Nifty 100", "Nifty 200", "Nifty LargeMidcap 250",

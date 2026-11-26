@@ -595,7 +595,7 @@ def load_benchmark(cutoff_key, market="IN"):
 
 
 def entry_settings(req):
-    """The entry rule and its Setup A + B settings (RULES.md 4.12), checked and in engine units."""
+    """The entry rule and its Setup A / second-chance settings (RULES.md 4.12), checked and in engine units."""
     d = BT_DEFAULTS
 
     def num(key, lo, hi):
@@ -608,10 +608,9 @@ def entry_settings(req):
         "entry": "breakout" if req.get("entry") == "breakout" else "rs",
         "near_high": num("nearHigh", 50, 100) / 100.0,
         "quiet": int(num("quiet", 1, 36)),
-        "a_slots": int(num("aSlots", 0, 50)),
-        "use_b": bool(req.get("useB", d["useB"])),
-        "band": 1 + num("band", 0, 50) / 100.0,
-        "list_life": int(num("listLife", 1, 36)),
+        "second": bool(req.get("second", d["second"])),
+        "reset": min(num("reset", 50, 100), num("nearHigh", 50, 100)) / 100.0,
+        "window": int(num("window", 1, 36)),
     }
 
 
@@ -619,16 +618,13 @@ def entry_rows(p):
     """Settings-sheet rows describing the entry rule."""
     if p.get("entry") != "breakout":
         return [("Entry rule", bt_engine.ENTRY_RULES["rs"])]
-    b_slots = max(0, p["slots"] - min(p["a_slots"], p["slots"]))
     return [
         ("Entry rule", bt_engine.ENTRY_RULES["breakout"]),
         ("Setup A: close at least % of the 12-month highest close", p["near_high"] * 100),
         ("Setup A: first time in (months)", p["quiet"]),
-        ("Setup B (pullback)", "On" if p["use_b"] else "Off"),
-        ("Slots for Setup A (rest for Setup B)", f"{min(p['a_slots'], p['slots'])} (Setup B: {b_slots})"
-         if p["use_b"] else f"All {p['slots']}"),
-        ("Setup B: month low below EMA x", round(p["band"], 4)),
-        ("Signals list: months a stock stays on it", p["list_life"]),
+        ("Second chance", "On" if p["second"] else "Off"),
+        ("Second chance: after a close below % of the 12-month highest close", p["reset"] * 100),
+        ("Second chance: within (months) of Setup A", p["window"]),
     ]
 
 
