@@ -491,3 +491,13 @@ button, input, select { font: inherit; color: inherit; }
 .sweep-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 .sweep-legend i.dot { border-radius: 50%; background: var(--ink); width: 6px; height: 6px; vertical-align: 1px; }
 .sweep-hover { color: var(--ink); font-weight: 600; }
+
+/* entry setups */
+.setup-fields { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 16px;
+  padding: 12px 14px; border: 1px dashed var(--line); border-radius: 10px; background: var(--mist); }
+.setup-hint { grid-column: 1 / -1; margin: 0; }
+.setup-tag { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px;
+  margin-left: 6px; border-radius: 5px; font-size: 11px; font-weight: 700; vertical-align: 1px; }
+.setup-A { background: #dff1ef; color: #0b6b67; }
+.setup-B { background: #fbefd8; color: #8a5a00; }
+.setup-table { margin-top: 6px; }

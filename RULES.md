@@ -95,7 +95,7 @@ The backtest decides at each **month-end close** and trades at the **first open 
 
 Daily prices are then turned into monthly candles: open = the month's first open, high = highest high, low = lowest low, close = last close. A month with no close is missing for that stock. Only completed months are used (2.7).
 
-**4.2 Buy rule (checked at each month-end, for stocks not already held).** A stock qualifies when all of these are true:
+**4.2 Buy rule (checked at each month-end, for stocks not already held).** The backtest has two entry rules to choose from: the **RS rule** below (the default) and **Setup A + B** (4.12). With the RS rule, a stock qualifies when all of these are true:
 1. its RS ratio is 100%, **or** its RS ratio is at least the minimum RS threshold **and** higher than its RS ratio two month-ends earlier;
 2. close at or above its 12-month EMA (if the EMA switch is on);
 3. closing range at or above the minimum;
@@ -130,12 +130,33 @@ A held stock is **never swapped** for a better candidate. It stays until a sell 
 
 **4.11 Path dependence.** Because held stocks are never swapped, the holdings in any month depend on the start month. Two backtests with different start months can hold different stocks in the same month.
 
+**4.12 Entry rule "Setup A + B" (breakout, then pullback).** An alternative to the RS rule in 4.2; ranking (4.3), the sell rule (4.4) and everything else stay the same. Both setups depend only on each stock's own prices, never on what the portfolio holds or whether slots were full.
+
+- **Setup A, fresh breakout.** At a month-end a stock qualifies when all of these are true:
+  1. its close is at least the near-high level (default **95%**) of its highest month-end close over the last 12 months (this month included; a new 12-month high counts);
+  2. that was not true at any of the previous *Q* month-ends (*Q* = "first time in", default **12**), so a stock needs 12 + *Q* months of prices;
+  3. RS ratio at least the minimum RS threshold;
+  4. close at or above its 12-month EMA (if the EMA switch is on), closing range and monthly return at or above their minimums;
+  5. a price exists at the next month's first open (for buying; not needed to join the list).
+- **Signals list.** Every Setup A stock joins the list in the month it qualifies, bought or not. At each later month-end it stays on the list only if its close is above its 12-month EMA; otherwise it is dropped and can come back only through a new Setup A. It stays at most the list life (default **12** months) after its Setup A month.
+- **Setup B, pullback to the EMA.** At a month-end a stock on the list (having joined in an earlier month) qualifies when all of these are true:
+  1. the month's low is below (1 + pullback %) × that month's 12-month EMA (default within **2%**, so low < 1.02 × EMA);
+  2. the close is above the 12-month EMA;
+  3. closing range at or above the minimum;
+  4. RS ratio at least the minimum RS threshold;
+  5. a price exists at the next month's first open.
+  The monthly-return minimum does **not** apply to Setup B. A stock that is Setup A in the same month counts as Setup A.
+- **Slots.** Setup A may hold at most the "slots for Setup A" (default **7** of 10). Setup B stocks fill the free slots that are left, including Setup A's when there are not enough Setup A stocks. A Setup A stock never takes a slot beyond its limit. Within each setup, candidates are ranked as in 4.3; Setup A stocks are placed first. With Setup B switched off, Setup A may use every slot.
+- **Held and sold stocks.** A held stock is not bought again. A stock sold on an RS exit whose close stays above the EMA is still on the list and can be bought again through Setup B.
+- **The 12-month high rolls.** Old prices drop out of the 12-month window, so a stock can come within 5% of its 12-month high because an older, higher close has dropped out, not because of a breakout. This is accepted (user's choice, 26 Nov 2026); the trade log shows each entry.
+- Trades, holdings, the orders panel and the running month show each stock's setup (A or B), and "How the trades went" shows results by setup.
+
 ---
 
 ## 5. Current month and orders
 
 **5.1 Orders for the next open.** When the backtest ends at the last completed month, the app shows the orders for the next month's first open, decided at that month-end close (final, not provisional):
-- **Start fresh** (a new portfolio): the top qualifying stocks (4.2, ranked by 4.3), one per slot. Quantity = whole shares of (starting capital ÷ slots) at the month-end close; if one share costs more than that, the quantity is 0 and the app says so. "Next in line" lists five more; the backtest itself never uses them.
+- **Start fresh** (a new portfolio): the top qualifying stocks (4.2 or 4.12, ranked by 4.3), one per slot. Quantity = whole shares of (starting capital ÷ slots) at the month-end close; if one share costs more than that, the quantity is 0 and the app says so. "Next in line" lists five more; the backtest itself never uses them.
 - **Continue the backtest portfolio:** the backtest's own sells (with reasons), holdings to keep, and buys for the free slots, as portfolio weights.
 - If the latest closing prices have not reached Yahoo yet, the panel warns; the next run fetches them again (at most every 20 minutes).
 
@@ -245,6 +266,14 @@ The values the code uses. This section is generated from the code; the website a
 | Backtest | Minimum closing range | 75% | settings.py `BT_DEFAULTS` |
 | Backtest | Minimum monthly return | 5% | settings.py `BT_DEFAULTS` |
 | Backtest | Ranking of candidates | Closing range (choices: Closing range, 6-month return, 12-month return) | settings.py `BT_DEFAULTS`, bt_engine.py `RANKINGS` |
+| Backtest | Entry rule (default) | RS rule (choices: RS rule; Setup A + B: breakout near the 12-month high, then pullback to the EMA) | settings.py `BT_DEFAULTS`, bt_engine.py `ENTRY_RULES` |
+| Setup A + B | Setup A: close at least this share of the highest close | 95% | settings.py `BT_DEFAULTS` |
+| Setup A + B | Setup A: highest close measured over | 12 months | bt_engine.py `HIGH_WINDOW` |
+| Setup A + B | Setup A: first time in | 12 months | settings.py `BT_DEFAULTS` |
+| Setup A + B | Slots for Setup A (rest for Setup B) | 7 of 10 | settings.py `BT_DEFAULTS` |
+| Setup A + B | Setup B switched on | On | settings.py `BT_DEFAULTS` |
+| Setup A + B | Setup B: month low within this % of the 12-month EMA | 2% | settings.py `BT_DEFAULTS` |
+| Setup A + B | Signals list life | 12 months | settings.py `BT_DEFAULTS` |
 | Backtest | Cost per buy and per sell | 0.2% | settings.py `BT_DEFAULTS` |
 | Backtest | Yield on cash | 6% a year | settings.py `BT_DEFAULTS` |
 | Backtest | Starting capital | ₹1,000,000 | settings.py `BT_DEFAULTS` |
@@ -270,6 +299,9 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 12. Change log
+
+**26 Nov 2026**
+- Backtest: new entry rule **Setup A + B** (4.12): buy a stock the first time in 12 months it closes within 5% of its 12-month highest close with RS of at least the threshold (Setup A), or later when it pulls back to its 12-month EMA and bounces while on the signals list (Setup B). Setup A holds at most 7 of 10 stocks; Setup B fills the rest. The RS rule stays the default; nothing changes unless you choose the new rule.
 
 **22 Nov 2026**
 - Added "Test every start month" in the Backtest tab (6.2): the same settings run from every start month to one end month, with a summary and every run's Excel file in one zip.

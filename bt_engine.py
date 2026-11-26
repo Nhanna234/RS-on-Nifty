@@ -30,6 +30,8 @@ EMA_SPAN = 12
 AT_HIGH = 1 - 1e-9
 MIN_ALLOC_FRAC = 0.20       # skip a buy if less than 20% of a slot's money is left in cash
 SPIKE_FACTOR = 1.6          # a one-day move of this size that fully reverses next day is a bad price
+ENTRY_RULES = {"rs": "RS rule", "breakout": "Setup A + B: breakout near the 12-month high, then pullback to the EMA"}
+HIGH_WINDOW = 12            # months in "12-month highest close" (Setup A)
 RANKINGS = {"cr": "Closing range", "ret6": "6-month return", "ret12": "12-month return"}
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -95,7 +97,7 @@ def indicators(m: dict, rs_index: pd.Series) -> dict:
     ratio = rs / rs.rolling(LOOKBACK, min_periods=LOOKBACK).max()
     ema = C.ewm(span=EMA_SPAN, adjust=False).mean().where(C.notna())
     return {
-        "C": C,
+        "C": C, "L": L,
         "ratio": ratio,
         "ratio2": ratio.shift(2),
         "ema": ema,
@@ -119,6 +121,80 @@ def eligible(ind: dict, p: dict, need_next_open: bool = True) -> pd.DataFrame:
     if p["use_ema"]:
         ok &= ind["C"] >= ind["ema"]
     return ok.fillna(False)
+
+
+def setup_signals(ind: dict, p: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Setup A and Setup B at each month-end (RULES.md 4.12). Neither depends on what the portfolio holds.
+
+    Setup A (fresh breakout): close >= near_high x the highest close of the last HIGH_WINDOW month-ends, for the
+    first time in `quiet` month-ends; RS >= threshold; the usual EMA, closing-range and monthly-return filters.
+    Signals list: every Setup A stock joins it; it stays while each month-end close is above the 12-month EMA,
+    for up to `list_life` months.
+    Setup B (pullback): a list member (joined in an earlier month) whose month low is below band x the month's
+    12-month EMA, closing above the EMA, closing range >= the minimum and RS >= threshold."""
+    key = ("_setups", p["near_high"], p["quiet"], p["band"], p["list_life"], p["threshold"], p["cr_min"],
+           p["mr_min"], p["use_ema"])
+    if key in ind:
+        return ind[key]
+    C, L, ema, ratio, cr, ret = ind["C"], ind["L"], ind["ema"], ind["ratio"], ind["cr"], ind["ret"]
+    high = C.rolling(HIGH_WINDOW, min_periods=HIGH_WINDOW).max()
+    near = (C >= p["near_high"] * high).astype(float).where(high.notna() & C.notna())
+    quiet = int(p["quiet"])
+    before = near.shift(1).rolling(quiet, min_periods=quiet).max()        # NaN without full history
+    first = (near == 1) & (before == 0)
+    a = first & (ratio >= p["threshold"]) & (cr * 100 >= p["cr_min"]) & (ret * 100 >= p["mr_min"])
+    if p["use_ema"]:
+        a &= C >= ema
+    a = a.fillna(False)
+    cond_b = ((L < p["band"] * ema) & (C > ema) & (cr * 100 >= p["cr_min"]) & (ratio >= p["threshold"])).fillna(False)
+
+    av, cv, ev = a.values, C.values, ema.values
+    member = np.zeros(av.shape, dtype=bool)
+    on_list = np.zeros(av.shape[1], dtype=bool)
+    since = np.full(av.shape[1], -10 ** 6)
+    life = int(p["list_life"])
+    with np.errstate(invalid="ignore"):
+        for i in range(av.shape[0]):
+            mem = on_list & (i - since <= life)
+            member[i] = mem
+            still = mem & (cv[i] > ev[i])
+            since = np.where(av[i], i, since)
+            on_list = still | av[i]
+    b = cond_b & pd.DataFrame(member, index=C.index, columns=C.columns) & ~a
+    ind[key] = (a, b)
+    return a, b
+
+
+def entry_signals(ind: dict, p: dict, need_next_open: bool = True) -> dict:
+    """{"RS": eligible} for the RS rule, {"A": ..., "B": ...} for Setup A + B."""
+    if p.get("entry", "rs") != "breakout":
+        return {"RS": eligible(ind, p, need_next_open)}
+    a, b = setup_signals(ind, p)
+    if need_next_open:
+        ok = ind["exec_px"].notna() & (ind["exec_px"] > 0)
+        a, b = a & ok, b & ok
+    return {"A": a, "B": b if p.get("use_b", True) else b & False}
+
+
+def entry_picks(sig: dict, ind: dict, p: dict, t: pd.Period, held: dict, free: int,
+                exclude=()) -> tuple[list, list]:
+    """Stocks to buy at the next open, in order, as (symbol, setup) pairs, plus every qualifying stock in
+    order (for reserves and counts). held: {symbol: setup} after this month's exits; exclude: other symbols
+    that may not be bought (the ones being sold).
+    Setup A + B: Setup A may hold up to a_slots stocks; Setup B fills the remaining free slots."""
+    free = max(0, free)
+    skip = set(held) | set(exclude)
+    if "RS" in sig:
+        ranked = rank(ind, p, t, [s for s in sig["RS"].columns[sig["RS"].loc[t].values] if s not in skip])
+        return [(s, "RS") for s in ranked[:free]], [(s, "RS") for s in ranked]
+    ra = rank(ind, p, t, [s for s in sig["A"].columns[sig["A"].loc[t].values] if s not in skip])
+    rb = rank(ind, p, t, [s for s in sig["B"].columns[sig["B"].loc[t].values] if s not in skip])
+    a_cap = min(int(p["a_slots"]), int(p["slots"])) if p.get("use_b", True) else int(p["slots"])
+    n_a = min(free, max(0, a_cap - sum(1 for v in held.values() if v == "A")), len(ra))
+    picks = [(s, "A") for s in ra[:n_a]] + [(s, "B") for s in rb[:free - n_a]]
+    chosen = {s for s, _ in picks}
+    rest = [(s, "A") for s in ra if s not in chosen] + [(s, "B") for s in rb if s not in chosen]
+    return picks, picks + rest
 
 
 def exit_reason(ind: dict, p: dict, t: pd.Period, s: str) -> str | None:
@@ -149,7 +225,7 @@ def rank(ind: dict, p: dict, t: pd.Period, cands: list[str]) -> list[str]:
 def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sectors: dict) -> dict:
     """Month-by-month portfolio. Returns equity path, monthly holdings and the trade log."""
     O, C, last_close = m["Open"], ind["C"], ind["last_close"]
-    elig = eligible(ind, p)
+    sig = entry_signals(ind, p)
     slots, cost = int(p["slots"]), p["cost"]
     cash_m = (1 + p["cash_yield"]) ** (1 / 12) - 1
 
@@ -171,9 +247,10 @@ def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sect
         # ---- decisions at the close of month t
         exits = [(s, why) for s in pos if (why := exit_reason(ind, p, t, s))]
         free = slots - (len(pos) - len(exits))
-        cands = [s for s in elig.columns[elig.loc[t].values] if s not in pos]
-        ranked = rank(ind, p, t, cands)
-        picks = ranked[:max(0, free)]
+        out = {s for s, _ in exits}
+        picks, qualified = entry_picks(sig, ind, p, t, {s: ps["setup"] for s, ps in pos.items() if s not in out},
+                                       free, exclude=out)
+        cands = [s for s, _ in qualified]
 
         # ---- trades at the first open of month t+1
         exited = []
@@ -188,22 +265,24 @@ def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sect
                 "entry": ps["entry"], "entryPx": ps["entryPx"], "exit": nxt, "exitPx": px,
                 "invested": ps["amount"], "proceeds": proceeds,
                 "ret": proceeds / ps["amount"] - 1, "months": held, "reason": why, "open": False,
+                "setup": ps["setup"],
             })
             exited.append({"symbol": s, "reason": why})
 
         value_open = cash + sum(ps["units"] * px_open(nxt, s) for s, ps in pos.items())
         target = value_open / slots
-        entered, skipped = [], []
-        for s in picks:
+        entered, skipped, setups = [], [], {}
+        for s, setup in picks:
             amt = min(target, cash)
             if amt < MIN_ALLOC_FRAC * target:
                 skipped.append(s)
                 continue
             px = O.at[nxt, s]
             pos[s] = {"units": amt * (1 - cost) / px, "entry": nxt, "entryPx": px, "amount": amt,
-                      "rsRatio": float(ind["ratio"].at[t, s]), "cr": float(ind["cr"].at[t, s])}
+                      "rsRatio": float(ind["ratio"].at[t, s]), "cr": float(ind["cr"].at[t, s]), "setup": setup}
             cash -= amt
             entered.append(s)
+            setups[s] = setup
 
         cash *= 1 + cash_m
 
@@ -215,7 +294,8 @@ def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sect
             stock_value += v
             start_px = ps["entryPx"] if ps["entry"] == nxt else px_close(t, s)
             held_rows.append({"symbol": s, "sector": sectors.get(s, "N/A"), "value": v,
-                              "ret": px_close(nxt, s) / start_px - 1, "new": ps["entry"] == nxt})
+                              "ret": px_close(nxt, s) / start_px - 1, "new": ps["entry"] == nxt,
+                              "setup": ps["setup"]})
         total = cash + stock_value
         for h in held_rows:
             h["weight"] = h["value"] / total if total else 0.0
@@ -223,7 +303,7 @@ def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sect
                        "n": len(pos)})
         months.append({
             "period": nxt, "held": sorted(held_rows, key=lambda h: -h["weight"]),
-            "entered": entered, "exited": exited, "skipped": skipped,
+            "entered": entered, "exited": exited, "skipped": skipped, "setups": setups,
             "candidates": len(cands), "cash": cash / total if total else 1.0,
         })
 
@@ -234,7 +314,7 @@ def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sect
             "entry": ps["entry"], "entryPx": ps["entryPx"], "exit": end, "exitPx": px,
             "invested": ps["amount"], "proceeds": ps["units"] * px,
             "ret": ps["units"] * px / ps["amount"] - 1, "months": (end - ps["entry"]).n + 1,
-            "reason": "Still held", "open": True,
+            "reason": "Still held", "open": True, "setup": ps["setup"],
         })
     return {"equity": equity, "months": months, "trades": trades}
 
@@ -259,7 +339,8 @@ def live_view(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, cur
     held = []
     for h in mo["held"]:
         t = open_trades.get(h["symbol"], {})
-        held.append({"symbol": h["symbol"], "sector": h["sector"], "w": _f(h["weight"]), "mtd": _f(h["ret"]),
+        held.append({"symbol": h["symbol"], "sector": h["sector"], "setup": h["setup"],
+                     "w": _f(h["weight"]), "mtd": _f(h["ret"]),
                      "since": _f(t.get("ret")), "bought": label(t["entry"]) if t else None,
                      "entryPx": _f(t.get("entryPx"), 2), "lastPx": _f(t.get("exitPx"), 2), "new": h["new"]})
 
@@ -271,12 +352,16 @@ def live_view(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, cur
         if why:
             exits.append({"symbol": s, "reason": why, "ratio": _f(ind["ratio"].at[cur, s])})
     free = int(p["slots"]) - (len(keep_syms) - len(exits))
-    elig = eligible(ind, p, need_next_open=False)
-    cands = [s for s in elig.columns[elig.loc[cur].values] if s not in keep_syms]
-    ranked = rank(ind, p, cur, cands)
+    out = {e["symbol"] for e in exits}
+    picks, qualified = entry_picks(entry_signals(ind, p, need_next_open=False), ind, p, cur,
+                                   {h["symbol"]: h["setup"] for h in mo["held"] if h["symbol"] not in out}, free,
+                                   exclude=out)
+    chosen = {s for s, _ in picks}
+    rest = [x for x in qualified if x[0] not in chosen]
 
-    def info(s):
-        return {"symbol": s, "sector": sectors.get(s, "N/A"), "ratio": _f(ind["ratio"].at[cur, s]),
+    def info(x):
+        s, setup = x
+        return {"symbol": s, "sector": sectors.get(s, "N/A"), "setup": setup, "ratio": _f(ind["ratio"].at[cur, s]),
                 "cr": _f(ind["cr"].at[cur, s]), "ret": _f(ind["ret"].at[cur, s]),
                 "rank": _f(ind[p.get("ranking", "cr")].at[cur, s])}
 
@@ -286,9 +371,9 @@ def live_view(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, cur
         "held": held, "sold": mo["exited"], "skipped": mo["skipped"], "cash": _f(mo["cash"]),
         "mtd": _f(v_now / v_prev - 1), "valueNow": _f(v_now, 0),
         "benchMtd": _f(b_now / b_prev - 1) if b_now is not None and b_prev is not None and pd.notna(b_now) and pd.notna(b_prev) else None,
-        "next": {"exits": exits, "buys": [info(s) for s in ranked[:max(0, free)]],
-                 "reserve": [info(s) for s in ranked[max(0, free):max(0, free) + 5]],
-                 "free": max(0, free), "qualified": len(ranked)},
+        "next": {"exits": exits, "buys": [info(x) for x in picks],
+                 "reserve": [info(x) for x in rest[:5]],
+                 "free": max(0, free), "qualified": len(qualified)},
     }
 
 
@@ -300,21 +385,25 @@ def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors:
     continue : the backtest's own portfolio; holdings to sell, holdings to keep, and buys for the free slots.
     """
     slots = int(p["slots"])
-    elig = eligible(ind, p, need_next_open=False)
+    sig = entry_signals(ind, p, need_next_open=False)
     C = ind["C"]
+    setup_of = {}
 
     def info(s):
         close = C.at[end, s]
-        return {"symbol": s, "sector": sectors.get(s, "N/A"), "close": _f(close, 2),
+        return {"symbol": s, "sector": sectors.get(s, "N/A"), "setup": setup_of.get(s), "close": _f(close, 2),
                 "ratio": _f(ind["ratio"].at[end, s]), "cr": _f(ind["cr"].at[end, s]), "ret": _f(ind["ret"].at[end, s]),
                 "rank": _f(ind[p.get("ranking", "cr")].at[end, s])}
 
-    ranked_all = rank(ind, p, end, list(elig.columns[elig.loc[end].values]))
+    fresh_picks, qualified = entry_picks(sig, ind, p, end, {}, slots)
+    setup_of.update({s: k for s, k in qualified})
+    ranked_all = [s for s, _ in qualified]
+    fresh_syms = [s for s, _ in fresh_picks]
 
     # ---- fresh start
     alloc = p["capital"] / slots
     fresh = []
-    for s in ranked_all[:slots]:
+    for s in fresh_syms:
         row = info(s)
         qty = int(alloc // row["close"]) if row["close"] else 0
         row.update({"weight": _f(1 / slots), "amount": _f(alloc, 0), "qty": qty, "cost": _f(qty * (row["close"] or 0), 0)})
@@ -323,6 +412,7 @@ def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors:
     # ---- continue the backtest's portfolio
     last = sim["months"][-1]
     held = {h["symbol"]: h for h in last["held"]}
+    setup_of.update({s: h["setup"] for s, h in held.items()})
     sells, keeps = [], []
     for s, h in held.items():
         why = exit_reason(ind, p, end, s)
@@ -333,8 +423,13 @@ def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors:
             keeps.append(row)
     free = slots - len(keeps)
     cash_share = last["cash"] + sum(x["weight"] or 0 for x in sells) * (1 - p["cost"])
+    cont_picks, cont_q = entry_picks(sig, ind, p, end, {r["symbol"]: held[r["symbol"]]["setup"] for r in keeps}, free,
+                                     exclude={r["symbol"] for r in sells})
+    for s, k in cont_q:
+        setup_of.setdefault(s, k)
     buys = []
-    for s in [x for x in ranked_all if x not in held]:
+    for s, k in cont_picks:
+        setup_of[s] = k
         if len(buys) >= free:
             break
         w = min(1 / slots, cash_share)
@@ -346,7 +441,7 @@ def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors:
     return {
         "decidedAt": end.strftime("%b %Y"), "executeIn": (end + 1).strftime("%b %Y"),
         "qualified": len(ranked_all),
-        "fresh": {"buys": fresh, "reserve": [info(s) for s in ranked_all[slots:slots + 5]],
+        "fresh": {"buys": fresh, "reserve": [info(s) for s in ranked_all if s not in fresh_syms][:5],
                   "capital": _f(p["capital"], 0), "perStock": _f(alloc, 0), "slots": slots},
         "continue": {"sells": sells, "keeps": sorted(keeps, key=lambda r: -(r["weight"] or 0)), "buys": buys,
                      "free": free, "cashAfter": _f(max(0.0, cash_share))},
@@ -451,7 +546,7 @@ def build_report(sim: dict, bench: pd.Series, p: dict, start: pd.Period, end: pd
     months = [{
         "m": label(x["period"]),
         "held": [{"symbol": h["symbol"], "sector": h["sector"], "w": _f(h["weight"]), "r": _f(h["ret"]),
-                  "new": h["new"]} for h in x["held"]],
+                  "new": h["new"], "setup": h.get("setup", "RS")} for h in x["held"]],
         "entered": x["entered"], "exited": x["exited"], "skipped": x["skipped"],
         "candidates": x["candidates"], "cash": _f(x["cash"]),
     } for x in sim["months"]]
@@ -460,7 +555,20 @@ def build_report(sim: dict, bench: pd.Series, p: dict, start: pd.Period, end: pd
         "symbol": t["symbol"], "sector": t["sector"], "entry": label(t["entry"]), "entryPx": _f(t["entryPx"], 2),
         "exit": label(t["exit"]), "exitPx": _f(t["exitPx"], 2), "ret": _f(t["ret"]), "months": t["months"],
         "reason": t["reason"], "open": t["open"], "pnl": _f(t["proceeds"] - t["invested"], 0),
+        "setup": t.get("setup", "RS"),
     } for t in sorted(sim["trades"], key=lambda t: (t["entry"], t["symbol"]))]
+
+    by_setup = {}
+    if p.get("entry", "rs") == "breakout":
+        for k in ("A", "B"):
+            tk = [t for t in sim["trades"] if t.get("setup") == k]
+            closed = [t for t in tk if not t["open"]]
+            rets = [t["ret"] for t in closed]
+            by_setup[k] = {"trades": len(tk), "closed": len(closed),
+                           "winRate": _f(sum(r > 0 for r in rets) / len(rets)) if rets else None,
+                           "avgRet": _f(sum(rets) / len(rets)) if rets else None,
+                           "avgMonths": _f(sum(t["months"] for t in closed) / len(closed), 1) if closed else None,
+                           "profit": _f(sum(t["proceeds"] - t["invested"] for t in tk), 0)}
 
     sstats = series_stats(eq, p["cash_yield"])
     return {
@@ -470,7 +578,7 @@ def build_report(sim: dict, bench: pd.Series, p: dict, start: pd.Period, end: pd
         "beatShare": beat,
         "tradeStats": {k: (_f(v) if not isinstance(v, dict) else v) for k, v in
                        trade_stats(sim["trades"], sim["months"], sim["equity"]).items()},
-        "grid": grid, "yearly": yearly, "months": months, "trades": trades,
+        "grid": grid, "yearly": yearly, "months": months, "trades": trades, "bySetup": by_setup,
         "finalValue": _f(eq.iloc[-1], 0), "capital": _f(eq.iloc[0], 0),
         "benchFinal": _f(bvals.iloc[-1], 0) if has_bench else None,
     }
@@ -504,10 +612,11 @@ def to_excel(report: dict, settings_rows: list[tuple]) -> bytes:
         pd.DataFrame([{"Symbol": t["symbol"], "Sector": t["sector"], "Bought (month)": t["entry"],
                        "Buy price": t["entryPx"], "Sold (month)": t["exit"], "Sell price": t["exitPx"],
                        "Return after costs": t["ret"], "Months held": t["months"], "Profit": t["pnl"],
-                       "Exit reason": t["reason"]} for t in report["trades"]]
+                       "Exit reason": t["reason"], "Entry setup": t.get("setup", "RS")} for t in report["trades"]]
                      ).to_excel(xw, sheet_name="Trades", index=False)
         pd.DataFrame([{"Month": mo["m"], "Symbol": h["symbol"], "Sector": h["sector"], "Weight": h["w"],
-                       "Return in month": h["r"], "Bought this month": "Yes" if h["new"] else ""}
+                       "Return in month": h["r"], "Bought this month": "Yes" if h["new"] else "",
+                       "Entry setup": h.get("setup", "RS")}
                       for mo in report["months"] for h in mo["held"]]
                      ).to_excel(xw, sheet_name="Holdings", index=False)
 

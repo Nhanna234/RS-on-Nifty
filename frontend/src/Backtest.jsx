@@ -35,6 +35,14 @@ function axisRupees(v) {
   if (v >= 1e5) return `₹${short(v / 1e5)} L`;
   return `₹${Math.round(v).toLocaleString("en-IN")}`;
 }
+function SetupTag({ k }) {
+  if (k !== "A" && k !== "B") return null;
+  return (
+    <span className={`setup-tag setup-${k}`} title={k === "A" ? "Setup A: fresh breakout near the 12-month high" : "Setup B: pullback to the 12-month EMA"}>
+      {k}
+    </span>
+  );
+}
 const tvSymbol = (sym) => (TV_PREFIX ? `${TV_PREFIX}:${sym}` : sym);
 function benchShortName(source) {
   if (source.startsWith("Nifty 50 Total")) return "Nifty 50 TRI";
@@ -136,6 +144,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
   };
   const endOf = (name) => marketInfo(name).end || defaults.end;
   const isUS = marketOf(s.index) === "US";
+  const breakout = s.entry === "breakout";
 
   const pickFiles = async (e) => {
     const picked = await Promise.all([...e.target.files].map(async (f) => ({ name: f.name, text: await f.text() })));
@@ -161,6 +170,13 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         cost: n(s.cost, 0, 5, 0.2),
         cashYield: n(s.cashYield, 0, 20, 6),
         capital: n(s.capital, 1000, 1e12, marketInfo(s.index).capital),
+        entry: s.entry === "breakout" ? "breakout" : "rs",
+        nearHigh: n(s.nearHigh, 50, 100, 95),
+        quiet: Math.round(n(s.quiet, 1, 36, 12)),
+        aSlots: Math.round(n(s.aSlots, 0, 50, 7)),
+        useB: s.useB !== false,
+        band: n(s.band, 0, 50, 2),
+        listLife: Math.round(n(s.listLife, 1, 36, 12)),
         ...lend,
       };
   };
@@ -227,6 +243,50 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         <label htmlFor="b-mr">Min monthly return %</label>
         <input id="b-mr" type="number" min="0" max="100" value={s.mr} onChange={set("mr")} />
       </div>
+      <div className="field">
+        <label htmlFor="b-entry">Entry rule</label>
+        <select id="b-entry" value={s.entry || "rs"} onChange={set("entry")}>
+          <option value="rs">RS rule</option>
+          <option value="breakout">Setup A + B (breakout, then pullback)</option>
+        </select>
+      </div>
+      {breakout && (
+        <div className="field field-full setup-fields">
+          <div className="field">
+            <label htmlFor="b-near" title="Setup A: month close at least this % of the 12-month highest close">Near 12-month high %</label>
+            <input id="b-near" type="number" min="50" max="100" step="0.5" value={s.nearHigh} onChange={set("nearHigh")} />
+          </div>
+          <div className="field">
+            <label htmlFor="b-quiet" title="Setup A: the close was not that near its high at any of this many previous month-ends">First time in (months)</label>
+            <input id="b-quiet" type="number" min="1" max="36" value={s.quiet} onChange={set("quiet")} />
+          </div>
+          <div className="field">
+            <label htmlFor="b-aslots" title="Setup A may hold at most this many stocks; Setup B fills the free slots that are left">Slots for Setup A</label>
+            <input id="b-aslots" type="number" min="0" max="50" value={s.aSlots} onChange={set("aSlots")} disabled={s.useB === false} />
+          </div>
+          <div className="field">
+            <label htmlFor="b-band" title="Setup B: the month's low came within this % of the 12-month EMA (or below it)">Pullback within % of EMA</label>
+            <input id="b-band" type="number" min="0" max="50" step="0.5" value={s.band} onChange={set("band")} disabled={s.useB === false} />
+          </div>
+          <div className="field">
+            <label htmlFor="b-life" title="Months a Setup A stock stays on the signals list (while it closes above the 12-month EMA)">Signals list life (months)</label>
+            <input id="b-life" type="number" min="1" max="36" value={s.listLife} onChange={set("listLife")} disabled={s.useB === false} />
+          </div>
+          <div className="field field-switches">
+            <label className="switch">
+              <input type="checkbox" checked={s.useB !== false} onChange={set("useB")} />
+              <span className="switch-track" aria-hidden="true" />
+              Use Setup B (pullback)
+            </label>
+          </div>
+          <p className="hint setup-hint">
+            Setup A: close at least {s.nearHigh}% of the 12-month highest close for the first time in {s.quiet} months, RS at least
+            the threshold, plus the EMA, closing range and monthly return filters. Setup B: a Setup A stock still on the signals
+            list whose month low came within {s.band}% of the 12-month EMA, closing above it, closing range at least the minimum and RS
+            at least the threshold. {s.useB === false ? "Setup B is off: Setup A may use every slot." : `Setup A holds at most ${s.aSlots} of ${s.slots} stocks; Setup B fills the free slots left.`}
+          </p>
+        </div>
+      )}
       <div className="field">
         <label htmlFor="b-rank">Rank candidates by</label>
         <select id="b-rank" value={s.ranking} onChange={set("ranking")}>
@@ -441,7 +501,7 @@ function BtResults({ result, dimmed }) {
 
       <p className="provenance">
         {universe.name} ({universe.source}): {universe.withData} of {universe.count} stocks had price data.{" "}
-        {period.start} to {period.end}, {period.months} months. Holding up to {settings.slots} stocks, RS threshold{" "}
+        {period.start} to {period.end}, {period.months} months. Entry: {settings.entryLabel || "RS rule"}. Holding up to {settings.slots} stocks, RS threshold{" "}
         {num(settings.threshold, 1)}%, ranked by {settings.rankingLabel.toLowerCase()}, {num(settings.cost, 2)}% cost per buy and
         per sell. Benchmark: {result.benchmarkSource}. Run at {result.asOf}.
       </p>
@@ -483,7 +543,7 @@ function BtResults({ result, dimmed }) {
       </div>
 
       <section className="panel">
-        <TradeStats t={r.tradeStats} />
+        <TradeStats t={r.tradeStats} bySetup={r.bySetup} />
       </section>
 
       <section className="panel">
@@ -899,6 +959,7 @@ function MonthHoldings({ months, curve, sel, onSel, slots }) {
               <tr key={h.symbol}>
                 <th scope="row">
                   <span className="stock-symbol">{h.symbol}</span>
+                  <SetupTag k={h.setup} />
                   {h.new && <span className="tag-new">Bought</span>}
                   <span className="hold-sector">{h.sector}</span>
                 </th>
@@ -990,6 +1051,7 @@ function LiveMonth({ live, slots, benchShort, rankingLabel }) {
                   <tr key={h.symbol}>
                     <th scope="row">
                       <span className="stock-symbol">{h.symbol}</span>
+                      <SetupTag k={h.setup} />
                       {h.new && <span className="tag-new">New</span>}
                       <span className="hold-sector">{h.sector}</span>
                     </th>
@@ -1073,6 +1135,7 @@ function CandTable({ rows, rankingLabel }) {
           <tr key={x.symbol}>
             <th scope="row">
               <span className="stock-symbol">{x.symbol}</span>
+              <SetupTag k={x.setup} />
               <span className="hold-sector">{x.sector}</span>
             </th>
             <td className="num">{pct(x.ratio)}</td>
@@ -1233,6 +1296,7 @@ function OrderTable({ rows, kind, rankingLabel, numbered }) {
               {numbered && <td className="num muted">{i + 1}</td>}
               <th scope="row">
                 <span className="stock-symbol">{x.symbol}</span>
+                <SetupTag k={x.setup} />
                 <span className="hold-sector">{x.sector}</span>
               </th>
               <td className="num">{num(x.close, 2)}</td>
@@ -1260,7 +1324,7 @@ function OrderTable({ rows, kind, rankingLabel, numbered }) {
 }
 
 /* ---------- trade statistics ---------- */
-function TradeStats({ t }) {
+function TradeStats({ t, bySetup }) {
   const reasons = Object.entries(t.exitReasons || {}).sort((a, b) => b[1] - a[1]);
   const total = reasons.reduce((a, [, v]) => a + v, 0) || 1;
   const items = [
@@ -1287,6 +1351,37 @@ function TradeStats({ t }) {
           </div>
         ))}
       </dl>
+      {bySetup && bySetup.A && (
+        <div className="reasons">
+          <h4>By entry setup</h4>
+          <table className="log setup-table">
+            <thead>
+              <tr>
+                <th scope="col">Setup</th>
+                <th scope="col" className="num">Buys</th>
+                <th scope="col" className="num">Won (closed)</th>
+                <th scope="col" className="num">Average closed trade</th>
+                <th scope="col" className="num">Average months</th>
+                <th scope="col" className="num">Profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {["A", "B"].map((k) => (
+                <tr key={k}>
+                  <th scope="row">
+                    <SetupTag k={k} /> {k === "A" ? "Fresh breakout" : "Pullback to EMA"}
+                  </th>
+                  <td className="num">{num(bySetup[k].trades, 0)}</td>
+                  <td className="num">{pct(bySetup[k].winRate, 0)}</td>
+                  <td className={`num${bySetup[k].avgRet < 0 ? " neg" : ""}`}>{spct(bySetup[k].avgRet)}</td>
+                  <td className="num">{num(bySetup[k].avgMonths, 1)}</td>
+                  <td className={`num${bySetup[k].profit < 0 ? " neg" : ""}`}>{rupees(bySetup[k].profit)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {reasons.length > 0 && (
         <div className="reasons">
           <h4>Why stocks were sold ({total} sales)</h4>
@@ -1391,6 +1486,7 @@ function TradeLog({ trades, onExcel }) {
               <tr key={`${t.symbol}-${t.entry}`}>
                 <th scope="row" className="stock-symbol">
                   {t.symbol}
+                  <SetupTag k={t.setup} />
                 </th>
                 <td className="log-sector">{t.sector}</td>
                 <td>

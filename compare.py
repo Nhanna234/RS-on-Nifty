@@ -17,7 +17,8 @@ import bt_engine as E
 
 
 def _slice(d: dict, cols: list[str]) -> dict:
-    return {k: v[cols] if isinstance(v, pd.DataFrame) else v for k, v in d.items()}
+    # cached Setup A + B signals (tuple keys) cover every stock, so they are left out and worked out again
+    return {k: v[cols] if isinstance(v, pd.DataFrame) else v for k, v in d.items() if not isinstance(k, tuple)}
 
 
 def run_all(monthly: dict, ind: dict, universes: dict, p: dict, periods: list[tuple[str, pd.Period, pd.Period]],
