@@ -143,9 +143,10 @@ A held stock is **never swapped** for a better candidate. It stays until a sell 
   1. the month's low is below (1 + pullback %) × that month's 12-month EMA (default within **2%**, so low < 1.02 × EMA);
   2. the close is above the 12-month EMA;
   3. closing range at or above the minimum;
-  4. RS ratio at least the minimum RS threshold;
-  5. a price exists at the next month's first open.
-  The monthly-return minimum does **not** apply to Setup B. A stock that is Setup A in the same month counts as Setup A.
+  4. monthly return at or above the minimum (default 5%);
+  5. RS ratio at least the minimum RS threshold;
+  6. a price exists at the next month's first open.
+  A stock that is Setup A in the same month counts as Setup A.
 - **Slots.** Setup A may hold at most the "slots for Setup A" (default **7** of 10). Setup B stocks fill the free slots that are left, including Setup A's when there are not enough Setup A stocks. A Setup A stock never takes a slot beyond its limit. Within each setup, candidates are ranked as in 4.3; Setup A stocks are placed first. With Setup B switched off, Setup A may use every slot.
 - **Held and sold stocks.** A held stock is not bought again. A stock sold on an RS exit whose close stays above the EMA is still on the list and can be bought again through Setup B.
 - **The 12-month high rolls.** Old prices drop out of the 12-month window, so a stock can come within 5% of its 12-month high because an older, higher close has dropped out, not because of a breakout. This is accepted (user's choice, 26 Nov 2026); the trade log shows each entry.
@@ -301,6 +302,7 @@ The values the code uses. This section is generated from the code; the website a
 ## 12. Change log
 
 **26 Nov 2026**
+- Setup B now also needs the monthly return to be at least the minimum (default 5%), like Setup A.
 - The website no longer asks for a username and password (sign-in switched off). No change to any rule.
 - Backtest: new entry rule **Setup A + B** (4.12): buy a stock the first time in 12 months it closes within 5% of its 12-month highest close with RS of at least the threshold (Setup A), or later when it pulls back to its 12-month EMA and bounces while on the signals list (Setup B). Setup A holds at most 7 of 10 stocks; Setup B fills the rest. The RS rule stays the default; nothing changes unless you choose the new rule.
 

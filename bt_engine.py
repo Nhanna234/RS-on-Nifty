@@ -131,7 +131,7 @@ def setup_signals(ind: dict, p: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     Signals list: every Setup A stock joins it; it stays while each month-end close is above the 12-month EMA,
     for up to `list_life` months.
     Setup B (pullback): a list member (joined in an earlier month) whose month low is below band x the month's
-    12-month EMA, closing above the EMA, closing range >= the minimum and RS >= threshold."""
+    12-month EMA, closing above the EMA, closing range and monthly return >= their minimums and RS >= threshold."""
     key = ("_setups", p["near_high"], p["quiet"], p["band"], p["list_life"], p["threshold"], p["cr_min"],
            p["mr_min"], p["use_ema"])
     if key in ind:
@@ -146,7 +146,8 @@ def setup_signals(ind: dict, p: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     if p["use_ema"]:
         a &= C >= ema
     a = a.fillna(False)
-    cond_b = ((L < p["band"] * ema) & (C > ema) & (cr * 100 >= p["cr_min"]) & (ratio >= p["threshold"])).fillna(False)
+    cond_b = ((L < p["band"] * ema) & (C > ema) & (cr * 100 >= p["cr_min"]) & (ret * 100 >= p["mr_min"])
+              & (ratio >= p["threshold"])).fillna(False)
 
     av, cv, ev = a.values, C.values, ema.values
     member = np.zeros(av.shape, dtype=bool)

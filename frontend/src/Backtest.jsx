@@ -282,7 +282,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
           <p className="hint setup-hint">
             Setup A: close at least {s.nearHigh}% of the 12-month highest close for the first time in {s.quiet} months, RS at least
             the threshold, plus the EMA, closing range and monthly return filters. Setup B: a Setup A stock still on the signals
-            list whose month low came within {s.band}% of the 12-month EMA, closing above it, closing range at least the minimum and RS
+            list whose month low came within {s.band}% of the 12-month EMA, closing above it, closing range and monthly return at least their minimums, and RS
             at least the threshold. {s.useB === false ? "Setup B is off: Setup A may use every slot." : `Setup A holds at most ${s.aSlots} of ${s.slots} stocks; Setup B fills the free slots left.`}
           </p>
         </div>
