@@ -41,6 +41,8 @@ FIELDS = ("Open", "High", "Low", "Close")
 SESSION_CUTOFF_IST = (17, 0)        # after 5 pm IST the day's prices count as final
 SESSION_CUTOFF_US = (20, 0)         # US stocks: after 8 pm New York time (about 6:30 am IST next day)
 REFETCH_MINUTES = 20                # a stock missing the latest close is asked again after this long
+LATE_SHARE = 0.5                    # if at least this share of stocks lack the latest close, the day is treated as
+LATE_PROBE = 5                      # a holiday or not yet published: only this many are asked, until one has it
 MARKET_CLOCK = {"IN": (IST, SESSION_CUTOFF_IST), "US": (ZoneInfo("America/New_York"), SESSION_CUTOFF_US)}
 US_BENCH_TRI = "^SP500TR"           # S&P 500 Total Return Index on Yahoo
 US_BENCH_PRICE = "^GSPC"            # S&P 500 price index on Yahoo (fallback benchmark, and the US RS index)
@@ -139,6 +141,7 @@ class PriceStore:
         self.downloader = downloader or (lambda tickers, start: _yf_download(tickers, start))
         self.batch = batch
         self.pause = pause
+        self._probe_after: dict = {}        # latest close -> when to ask a few stocks for it again
 
     def _path(self, sym: str) -> str:
         return os.path.join(self.dir, quote(sym, safe="") + ".pkl")
@@ -171,7 +174,12 @@ class PriceStore:
         """need_date: the latest session whose close should be present. A stock still trading recently
         but missing that close (Yahoo had not published it at the last fetch) is fetched again,
         at most every 20 minutes."""
-        full, stale = [], []
+        full, stale, late = self._plan(symbols, fresh_after, need_date)
+        return full, stale + late
+
+    def _plan(self, symbols, fresh_after: datetime, need_date=None) -> tuple[list, list, list]:
+        """(never fetched or empty and old, fetched before the cutoff, fetched since but missing need_date)."""
+        full, stale, late = [], [], []
         now = now_ist()
         need = pd.Timestamp(need_date) if need_date is not None else None
         for s in symbols:
@@ -184,8 +192,8 @@ class PriceStore:
             elif need is not None:
                 last = rec["df"].index.max()
                 if need - pd.Timedelta(days=10) <= last < need and rec["fetched"] < now - timedelta(minutes=REFETCH_MINUTES):
-                    stale.append(s)
-        return full, stale
+                    late.append(s)
+        return full, stale, late
 
     def _fetch(self, syms: list[str], start: str, progress=None, done0=0, total=1) -> dict:
         got = {}
@@ -214,34 +222,34 @@ class PriceStore:
     def update(self, symbols, fresh_after: datetime, progress=None, need_date=None) -> dict:
         """Bring `symbols` up to date. Returns counts for display."""
         with self.lock:
-            full, stale = self.plan(symbols, fresh_after, need_date)
+            full, stale, late = self._plan(symbols, fresh_after, need_date)
             now = now_ist()
+            redo = []
+            if late:
+                recent = sum(1 for s in symbols if (r := self._get(s)) is not None and not r["df"].empty
+                             and r["df"].index.max() >= pd.Timestamp(need_date) - pd.Timedelta(days=10))
+                if len(late) >= max(LATE_PROBE + 1, LATE_SHARE * recent):
+                    # most stocks lack the latest close: a market holiday, or Yahoo has not published it yet.
+                    # Ask a few; only if they have it now, ask the rest (instead of every stock every 20 minutes).
+                    key = pd.Timestamp(need_date)
+                    if now >= self._probe_after.get(key, now):
+                        probe = late[:LATE_PROBE]
+                        redo += self._refresh(probe, now)
+                        if any(self._get(s)["df"].index.max() >= key for s in probe if self._get(s) is not None):
+                            stale += late[LATE_PROBE:]
+                        else:
+                            self._probe_after[key] = now + timedelta(minutes=REFETCH_MINUTES)
+                else:
+                    stale += late
             stats = {"full": len(full), "refreshed": len(stale), "re-downloaded": 0, "failed": []}
             total = len(full) + len(stale)
-            if total == 0:
+            if total == 0 and not redo:
                 return stats
-            redo = []
             cutoff_old = pd.Timestamp(now.date()) - pd.Timedelta(days=40)
             old = [s for s in stale if self._get(s)["df"].index.max() < cutoff_old]
             stale = [s for s in stale if s not in old]
             full = full + old
-            if stale:
-                last = min(self._get(s)["df"].index.max() for s in stale)
-                start = (last - timedelta(days=12)).strftime("%Y-%m-%d")
-                got = self._fetch(stale, start, progress, 0, total)
-                for s in stale:
-                    prev = self._get(s)["df"]
-                    new = got.get(s)
-                    if new is None or new.empty:
-                        self._put(s, prev, now)              # nothing new (holiday): keep
-                        continue
-                    common = prev.index.intersection(new.index)
-                    if len(common):
-                        ratio = (new.loc[common, "Close"] / prev.loc[common, "Close"].astype("float64")).dropna()
-                        if len(ratio) and (ratio - 1).abs().max() > 0.002:
-                            redo.append(s)                    # Yahoo re-adjusted history
-                            continue
-                    self._put(s, pd.concat([prev.astype("float64"), new]), now)
+            redo += self._refresh(stale, now, progress, total)
             full_all = full + redo
             stats["re-downloaded"] = len(redo)
             if full_all:
@@ -255,6 +263,30 @@ class PriceStore:
                     else:
                         self._put(s, df, now)
             return stats
+
+    def _refresh(self, stale, now, progress=None, total=None) -> list:
+        """Adds the latest days to stocks already stored. Returns the stocks whose history Yahoo re-adjusted
+        (they need a full download)."""
+        redo = []
+        if not stale:
+            return redo
+        last = min(self._get(s)["df"].index.max() for s in stale)
+        start = (last - timedelta(days=12)).strftime("%Y-%m-%d")
+        got = self._fetch(stale, start, progress, 0, total or len(stale))
+        for s in stale:
+            prev = self._get(s)["df"]
+            new = got.get(s)
+            if new is None or new.empty:
+                self._put(s, prev, now)              # nothing new (holiday): keep
+                continue
+            common = prev.index.intersection(new.index)
+            if len(common):
+                ratio = (new.loc[common, "Close"] / prev.loc[common, "Close"].astype("float64")).dropna()
+                if len(ratio) and (ratio - 1).abs().max() > 0.002:
+                    redo.append(s)                    # Yahoo re-adjusted history
+                    continue
+            self._put(s, pd.concat([prev.astype("float64"), new]), now)
+        return redo
 
     def last_date(self, symbols):
         """Latest date with a price across `symbols`."""

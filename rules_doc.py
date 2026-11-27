@@ -17,6 +17,7 @@ from pathlib import Path
 import bt_data
 import bt_engine
 import lender_filter
+import price_snapshot
 import settings as S
 import sweep
 import us_universe
@@ -102,6 +103,14 @@ def parameter_rows() -> list[tuple[str, str, str, str]]:
         ("Data", "A day's prices count as final from, US stocks", f"{us_h}:{us_m:02d} New York time",
          "bt_data.py `SESSION_CUTOFF_US`"),
         ("Data", "Missing latest close asked again after", f"{bt_data.REFETCH_MINUTES} minutes", "bt_data.py `REFETCH_MINUTES`"),
+        ("Data", "When most stocks lack the latest close (holiday or late data), stocks asked first",
+         f"{bt_data.LATE_PROBE}, once at least {round(bt_data.LATE_SHARE * 100)}% of recently fetched stocks lack it",
+         "bt_data.py `LATE_PROBE`, `LATE_SHARE`"),
+        ("Data", "Saved price file", f"GitHub release `{price_snapshot.SNAPSHOT_TAG}` of {price_snapshot.SNAPSHOT_REPO}: "
+         + ", ".join(f"`{f}`" for f in price_snapshot.SNAPSHOT_FILES.values()), "price_snapshot.py `SNAPSHOT_REPO`, `SNAPSHOT_TAG`, `SNAPSHOT_FILES`"),
+        ("Data", "Saved price file refreshed", "weekdays at 20:00 IST and 08:00 IST (GitHub Actions)", "`.github/workflows/price-snapshot.yml`"),
+        ("Data", "Saved price file published only if stocks with prices are at least",
+         f"{round(price_snapshot.MIN_SHARE_WITH_DATA * 100)}%", "price_snapshot.py `MIN_SHARE_WITH_DATA`"),
         ("Lending filter", "Basic industries treated as lending", ", ".join(lender_filter.LENDING_LABELS),
          "lender_filter.py `LENDING_LABELS`"),
         ("Lending filter", "Fallback list of financial institutions", ", ".join(sorted(lender_filter.KNOWN_FIS)),

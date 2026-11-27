@@ -95,6 +95,14 @@ The backtest decides at each **month-end close** and trades at the **first open 
 
 Daily prices are then turned into monthly candles: open = the month's first open, high = highest high, low = lowest low, close = last close. A month with no close is missing for that stock. Only completed months are used (2.7).
 
+**Where the prices are kept.** The website's server forgets its stored prices whenever Streamlit Cloud puts the app to sleep or restarts it. So a copy is kept on GitHub:
+- A scheduled GitHub job (`.github/workflows/price-snapshot.yml`) runs on weekdays at 20:00 IST and 08:00 IST (and can be started by hand). It downloads the daily prices of every Nifty Total Market stock (or, if that list is not available, Nifty 500 and Nifty Microcap 250) and every Nasdaq 100 stock from Yahoo Finance, using the same cleaning and the same files as the website, and saves them as `prices_in.tar.gz` and `prices_us.tar.gz` on the repository's `price-store` release. Each run starts from the previous file, so it only asks Yahoo for new days.
+- The job does not publish a file in which fewer than 90% of the stocks have prices, so a bad Yahoo day cannot replace a good file.
+- When the website starts with no stored prices, it downloads that file once (a few seconds) and then asks Yahoo only for the days after it. If the file cannot be downloaded, prices come from Yahoo as before; nothing else changes.
+- The saved file holds the same Yahoo prices the website would download itself; it changes speed, not results.
+
+**Holidays and late data.** When at least half of the stocks that were fetched after the day's cutoff still lack that day's close (a market holiday the app does not know about, or Yahoo publishing late), the app asks Yahoo for 5 of them first. If none has the day yet, it waits 20 minutes before asking again instead of downloading every stock again. If any has it, all the missing stocks are fetched. When only a few stocks lack the day, they are fetched directly, as before.
+
 **4.2 Buy rule (checked at each month-end, for stocks not already held).** The backtest has two entry rules to choose from: the **RS rule** below (the default) and **Setup A + second chance** (4.12). With the RS rule, a stock qualifies when all of these are true:
 1. its RS ratio is 100%, **or** its RS ratio is at least the minimum RS threshold **and** higher than its RS ratio two month-ends earlier;
 2. close at or above its 12-month EMA (if the EMA switch is on);
@@ -154,7 +162,7 @@ A held stock is **never swapped** for a better candidate. It stays until a sell 
 **5.1 Orders for the next open.** When the backtest ends at the last completed month, the app shows the orders for the next month's first open, decided at that month-end close (final, not provisional):
 - **Start fresh** (a new portfolio): the top qualifying stocks (4.2 or 4.12, ranked by 4.3), one per slot. Quantity = whole shares of (starting capital ÷ slots) at the month-end close; if one share costs more than that, the quantity is 0 and the app says so. "Next in line" lists five more; the backtest itself never uses them.
 - **Continue the backtest portfolio:** the backtest's own sells (with reasons), holdings to keep, and buys for the free slots, as portfolio weights.
-- If the latest closing prices have not reached Yahoo yet, the panel warns; the next run fetches them again (at most every 20 minutes).
+- If the latest closing prices have not reached Yahoo yet, the panel warns; the next run fetches them again (at most every 20 minutes; when most stocks lack the day, 5 are checked first, see 4.1).
 
 **5.2 The running month.** After the next month has started, the app shows that month's holdings (final: decided at the previous month-end) with their returns so far (provisional), and what the rules would sell and buy if the month closed at the latest prices (provisional until the month ends).
 
@@ -280,6 +288,10 @@ The values the code uses. This section is generated from the code; the website a
 | Data | A day's prices count as final from | 17:00 IST | bt_data.py `SESSION_CUTOFF_IST` |
 | Data | A day's prices count as final from, US stocks | 20:00 New York time | bt_data.py `SESSION_CUTOFF_US` |
 | Data | Missing latest close asked again after | 20 minutes | bt_data.py `REFETCH_MINUTES` |
+| Data | When most stocks lack the latest close (holiday or late data), stocks asked first | 5, once at least 50% of recently fetched stocks lack it | bt_data.py `LATE_PROBE`, `LATE_SHARE` |
+| Data | Saved price file | GitHub release `price-store` of Nhanna234/RS-on-Nifty: `prices_in.tar.gz`, `prices_us.tar.gz` | price_snapshot.py `SNAPSHOT_REPO`, `SNAPSHOT_TAG`, `SNAPSHOT_FILES` |
+| Data | Saved price file refreshed | weekdays at 20:00 IST and 08:00 IST (GitHub Actions) | `.github/workflows/price-snapshot.yml` |
+| Data | Saved price file published only if stocks with prices are at least | 90% | price_snapshot.py `MIN_SHARE_WITH_DATA` |
 | Lending filter | Basic industries treated as lending | Public Sector Bank, Private Sector Bank, Other Bank, Non Banking Financial Company (NBFC), Housing Finance Company, Financial Institution | lender_filter.py `LENDING_LABELS` |
 | Lending filter | Fallback list of financial institutions | HUDCO, IFCI, IREDA, IRFC, PFC, RECLTD | lender_filter.py `KNOWN_FIS` |
 | Lending filter | NSE classification kept for | 30 days | lender_filter.py `CACHE_DAYS` |
@@ -294,6 +306,10 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 12. Change log
+
+**27 Nov 2026**
+- Faster start after the website has been asleep: a copy of all daily prices is now saved on GitHub twice every weekday (20:00 and 08:00 IST) by a scheduled job, and the website loads that copy when it starts instead of downloading 15 years of prices for every stock again (4.1). If the copy cannot be loaded, prices come from Yahoo as before. No change to any rule or result.
+- Holidays and late Yahoo data no longer make the app download every stock again every 20 minutes: when most stocks lack the latest day, 5 are checked first (4.1).
 
 **26 Nov 2026**
 - Replaced Setup B (pullback to the 12-month EMA, with 7 of 10 slots reserved for Setup A) with a **second chance** (4.12): a stock that had Setup A in the last 12 months, then closed more than 5% below its 12-month high, can be bought when it closes near its high again with the same RS and filters. Setup A and second-chance stocks share all slots and one ranking. The RS rule stays the default.

@@ -4,7 +4,7 @@ This is Ali's RS Leaderboard app ("Abu Abdullah"): a Streamlit app (`app.py`) wi
 
 ## Rules document: keep it current
 
-`RULES.md` is the written rulebook of the screener and the backtest, and the app's **Rules** tab displays it. Whenever you change any logic, filter, default or data handling (in `app.py`, `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py`, `sweep.py`, `us_universe.py` or `settings.py`):
+`RULES.md` is the written rulebook of the screener and the backtest, and the app's **Rules** tab displays it. Whenever you change any logic, filter, default or data handling (in `app.py`, `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py`, `sweep.py`, `us_universe.py`, `price_snapshot.py` or `settings.py`):
 
 1. Update the relevant section of `RULES.md` so it describes what the code now does.
 2. Add a dated entry at the top of the **Change log** in `RULES.md`, in plain language.
@@ -17,5 +17,6 @@ Adjustable values belong in `settings.py` (or a named constant in the module tha
 - `data/nasdaq100.csv` is the fallback Nasdaq-100 list used when Nasdaq and Wikipedia do not answer; refresh it (and `SNAPSHOT_DATE` in `us_universe.py`) after an index change.
 - After changing `frontend/src`, run `cd frontend && npm install && npm run build` and commit `frontend/dist`.
 - Sign-in: `auth.py` (password hashing, lockout, the "keep me signed in" cookie) and the sign-in pages in `app.py`. Accounts live in the app's Secrets under `[login]` (locally `.streamlit/secrets.toml`, which is git-ignored and must never be committed). With no accounts configured the site stays locked and shows a setup page. Sign-in is currently switched off (`LOGIN_REQUIRED = False` in `settings.py`); set it to `True` to bring it back.
-- `auth.py`, `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py`, `sweep.py`, `us_universe.py`, `settings.py` and `rules_doc.py` have no Streamlit imports and can be tested on their own.
+- Saved prices: `price_snapshot.py` packs the price store into `prices_in.tar.gz` / `prices_us.tar.gz` on the GitHub release `price-store`. `.github/workflows/price-snapshot.yml` rebuilds them on weekdays at 20:00 and 08:00 IST (start it by hand with `gh workflow run price-snapshot.yml`). The app restores the file once when its price folder is empty (`_price_store` in `app.py`) and falls back to Yahoo if that fails. Locally: `python price_snapshot.py build --market IN --out prices_in.tar.gz`.
+- `auth.py`, `bt_engine.py`, `bt_data.py`, `lender_filter.py`, `compare.py`, `sweep.py`, `us_universe.py`, `settings.py`, `price_snapshot.py` and `rules_doc.py` have no Streamlit imports and can be tested on their own.
 - Ali is new to coding: explain changes in plain language.

@@ -20,6 +20,7 @@ import bt_data
 import bt_engine
 import compare
 import lender_filter
+import price_snapshot
 import rules_doc
 import settings
 import sweep
@@ -27,7 +28,8 @@ import us_universe
 
 # After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
 # modules in memory. Reload any whose file has changed since it was loaded.
-for _mod in (settings, auth, bt_data, bt_engine, lender_filter, compare, sweep, us_universe, rules_doc):
+for _mod in (settings, auth, bt_data, bt_engine, lender_filter, compare, sweep, us_universe, price_snapshot,
+             rules_doc):
     _mtime = os.path.getmtime(_mod.__file__)
     if getattr(_mod, "_loaded_mtime", None) != _mtime:
         importlib.reload(_mod)
@@ -41,11 +43,7 @@ ALL_INDICES = list(INDEX_FILES) + list(US_INDICES)
 
 # --- STANDARD INDEX UNIVERSES ---
 # Official NSE Indices constituent files (columns: Company Name, Industry, Symbol, Series, ISIN Code)
-CONSTITUENT_MIRRORS = [
-    "https://niftyindices.com/IndexConstituent/{f}",
-    "https://www.niftyindices.com/IndexConstituent/{f}",
-    "https://nsearchives.nseindia.com/content/indices/{f}",
-]
+CONSTITUENT_MIRRORS = settings.CONSTITUENT_MIRRORS
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
@@ -572,8 +570,13 @@ PRICE_STORE_DIRS = {"IN": "rs_bt_price_store", "US": "rs_bt_price_store_us"}
 
 @st.cache_resource(max_entries=2)
 def _price_store(code_version, market):
-    return bt_data.PriceStore(os.path.join(tempfile.gettempdir(), PRICE_STORE_DIRS[market]),
-                              suffix=MARKETS[market]["yahoo_suffix"])
+    folder = os.path.join(tempfile.gettempdir(), PRICE_STORE_DIRS[market])
+    # a fresh server starts with an empty folder: fill it from the saved price file on GitHub (price_snapshot.py),
+    # so only newer days are downloaded; if that fails, prices are downloaded from Yahoo as before
+    snapshot = price_snapshot.restore(folder, market)
+    store = bt_data.PriceStore(folder, suffix=MARKETS[market]["yahoo_suffix"])
+    store.snapshot = snapshot
+    return store
 
 
 def price_store(market="IN"):

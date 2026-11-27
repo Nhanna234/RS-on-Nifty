@@ -19,6 +19,11 @@ INDEX_FILES = {                      # NSE Indices constituent files
     "Nifty 500": "ind_nifty500list.csv",
     "Nifty Total Market": "ind_niftytotalmarket_list.csv",
 }
+CONSTITUENT_MIRRORS = [              # where the index lists are downloaded from, tried in turn
+    "https://niftyindices.com/IndexConstituent/{f}",
+    "https://www.niftyindices.com/IndexConstituent/{f}",
+    "https://nsearchives.nseindia.com/content/indices/{f}",
+]
 DEFAULT_INDEX = "Nifty Total Market"
 LOGIN_REQUIRED = False          # True brings back the sign-in page (accounts in the app's Secrets, see auth.py)
 US_INDICES = ["Nasdaq 100"]          # US universes; their lists come from us_universe.py

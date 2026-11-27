@@ -1,0 +1,59 @@
+# Every weekday evening: bring the saved price files up to date and publish them on the
+# repository's Releases page (tag "price-store"). The app loads them when Streamlit starts it on a
+# fresh server, so it does not have to download every stock's history again. See price_snapshot.py.
+name: Price snapshot
+
+on:
+  schedule:
+    - cron: "30 14 * * 1-5"     # 20:00 IST, after the 17:00 IST close is final and Yahoo has it
+    - cron: "30 2 * * 2-6"      # 08:00 IST next morning: US close, and a retry for India
+  workflow_dispatch: {}          # "Run workflow" button on the Actions page
+
+permissions:
+  contents: write                # needed to publish the files on the Releases page
+
+concurrency:
+  group: price-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install pandas==3.0.3 numpy==2.4.6 yfinance==1.4.1 requests lxml==6.1.3 tzdata pyarrow
+      - name: Make sure the release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view price-store >/dev/null 2>&1 || gh release create price-store \
+            --title "Saved prices" \
+            --notes "Daily price files for the app (updated automatically by the Price snapshot job). Not a software release."
+      - name: Build Indian prices
+        id: india
+        continue-on-error: true
+        run: python price_snapshot.py build --market IN --out prices_in.tar.gz
+      - name: Build US prices
+        id: us
+        continue-on-error: true
+        run: python price_snapshot.py build --market US --out prices_us.tar.gz
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=""
+          [ -f prices_in.tar.gz ] && files="$files prices_in.tar.gz"
+          [ -f prices_us.tar.gz ] && files="$files prices_us.tar.gz"
+          if [ -z "$files" ]; then echo "Nothing built"; exit 1; fi
+          gh release upload price-store $files --clobber
+      - name: Fail if a market did not build
+        if: steps.india.outcome == 'failure' || steps.us.outcome == 'failure'
+        run: |
+          echo "India: ${{ steps.india.outcome }}, US: ${{ steps.us.outcome }}"
+          exit 1
