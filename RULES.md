@@ -248,7 +248,42 @@ Use the backtest's orders panel, not the screener, for the stocks to buy.
 
 ---
 
-## 11. Parameters
+## 11. Market breadth and Sector rotation tabs
+
+These two tabs came from the Abdullah Dashboard (github.com/Nhanna234/Abdullah_Dashboard) on 28 Nov 2026. The calculations are unchanged (`market_dash.py`, `sectors.py`, `rs_leaders.py`; tested to give identical output to the dashboard's own code). They are **daily** views of the market and do not feed the screener or the backtest. Their "market breadth" (% of Nifty 500 above the 50-day average) is a different, faster measure from the backtest's monthly breadth rule (4.13, % of the universe above the 12-month EMA).
+
+**11.1 Data.** Index closes of the Nifty 50, Nifty Midcap 150 and Nifty Smallcap 250 from niftyindices.com (Yahoo Finance if that fails). Nifty 500 members from the NSE Indices list (the same list the screener uses). Daily stock closes from this app's stored Yahoo prices, adjusted for splits and dividends (the same prices the backtest uses; if they cannot be read, they are downloaded from Yahoo as the dashboard did). A day's prices count after 5 pm IST. Index closes are kept for an hour, stock prices for 6 hours and lists for a day; **Refresh data** clears them and reloads the page.
+
+**11.2 Trend state of each index (Market breadth tab), every session.** Fast EMA = 10 days, slow EMA = 50 days, each started from the average of its first closes; 3-month low = the lowest close of the last 63 sessions.
+- **S-UT (strong uptrend):** close above both EMAs and the 10-day EMA above the 50-day EMA.
+- **UT (uptrend):** any other close above the 50-day EMA.
+- **DT (downtrend):** not above the 50-day EMA and at a 3-month low. "At a 3-month low" depends on the chosen setting: a fresh 3-month closing low within the last 10 sessions (default), today's close being the low, or a close within 2% of the low.
+- **S-DT (strong downtrend):** DT, plus close below both EMAs and the 10-day EMA below the 50-day EMA.
+- **TZ (transition zone):** everything else.
+
+**11.3 Regime, posture and score.** Score: S-UT +2, UT +1, TZ 0, DT −1, S-DT −2, added over the three indices (−6 to +6); a change of 3 or more over 5 sessions is called improving or deteriorating.
+
+| Indices in uptrend (UT/S-UT) or downtrend (DT/S-DT) | Regime | Posture |
+|---|---|---|
+| All three up (all S-UT: "strong") | Broad (strong) uptrend | Risk-on |
+| All three down (all S-DT: "strong") | Broad (strong) downtrend | Risk-off |
+| At least one up and one down | Divergent | Cautious |
+| Only the Nifty 50 up | Narrow: large-caps only | Cautious |
+| Nifty 50 and one other up | Breadth narrowing | Selective |
+| Midcap and Smallcap up, Nifty 50 not | Broader market leading | Constructive |
+| One of Midcap/Smallcap up, nothing down | Mixed | Selective |
+| None up, none down | Correction / no trend | Defensive |
+| None up, some down | Weakening | Defensive |
+
+**11.4 Breadth on this tab.** Participation = share of Nifty 500 stocks whose close is above their own 50-day simple average (stocks with 50 days of prices). Zones: 80%+ Overheated, 60%+ Healthy, 40%+ Neutral, 20%+ Weak, below 20% Washed-out. Against the posture: in Risk-on or Constructive it **confirms** at 50%+ and **diverges** below 40%; in Defensive or Risk-off it confirms at 40% or less and diverges at 50%+; otherwise neutral. A change of 10 points or more over 5 sessions is flagged; a **breadth thrust** is a move from below 25% to above 60% within 10 sessions. The longer-term line counts Nifty 500 stocks whose 50-day EMA is above their 200-day EMA. Each session's written remark is built from these facts.
+
+**11.5 Sector rotation tab.** NSE sectoral and thematic indices plus the Nifty 50/200/500 ("Major" by default, or all NSE indices). Returns use the first close on or after the date N calendar days back: 1W 7, 1M 30, 3M 90 (or 60, as in the original Google Sheet), 6M 180, 1Y 365 days. **Rank(1,3,6)** = 0.5 × rank of the 1M return + 0.3 × rank of the 3M return + 0.2 × rank of the 6M return (rank 1 = best; lowest score first, ties by the better 1M return). It can also be ranked by 3M return or by distance from the 52-week low. The rank history shows each index's position at every week's last close, the leaders are the top 5, and the notes describe moves over 4 weeks.
+
+**11.6 Strong stocks inside the leading indices.** The members of the ticked indices are screened with the screener's RS rules on monthly Yahoo prices (3 years): RS 100% by default, last 6 months shown, close above the 12-month EMA, closing range 75%+, monthly return 5%+. Lending companies are left out by default with the same filter as 1.4. The running month is provisional until it ends.
+
+---
+
+## 12. Parameters
 
 The values the code uses. This section is generated from the code; the website always shows the current values.
 
@@ -315,11 +350,25 @@ The values the code uses. This section is generated from the code; the website a
 | Start-month test | Shortest run | 3 months | sweep.py `SWEEP_MIN_MONTHS` |
 | Start-month test | Annual return shown for runs of at least | 12 months | sweep.py `CAGR_MIN_MONTHS` |
 | Start-month test | Most start months in one test | 240 | sweep.py `MAX_SWEEP_RUNS` |
+| Market breadth tab | Trend EMAs (fast / slow) | 10 / 50 days | market_dash.py `CFG` |
+| Market breadth tab | 3-month low | lowest close of 63 sessions; fresh low within 10 sessions (default), or within 2% | market_dash.py `CFG` |
+| Market breadth tab | Participation | % of Nifty 500 above their 50-day average; 50-day EMA above 200-day EMA count | market_dash.py `CFG` |
+| Market breadth tab | Breadth zones | 80%+ Overheated, 60%+ Healthy, 40%+ Neutral, 20%+ Weak, 0%+ Washed-out | market_dash.py `CFG` |
+| Market breadth tab | Confirms / diverges | up postures: 50%+ / below 40%; down postures: 40% or less / 50%+ | market_dash.py `CFG` |
+| Market breadth tab | Breadth thrust | below 25% to above 60% within 10 sessions | market_dash.py `CFG` |
+| Market breadth tab | Score and breadth change flagged | score 3+ in 5 sessions; breadth 10+ points in 5 sessions | market_dash.py `CFG` |
+| Sector rotation tab | Rank(1,3,6) weights | 1M 0.5, 3M 0.3, 6M 0.2 | sectors.py `SECTOR_CFG` |
+| Sector rotation tab | Return look-backs (calendar days) | 1w 7, 1m 30, 6m 180, 1y 365, 3M 90 (or 60 as in the sheet) | sectors.py `SECTOR_CFG` |
+| Sector rotation tab | Leaders / moves measured over | top 5 / 4 weeks; history up to 26 weeks | sectors.py `SECTOR_CFG` |
+| Sector rotation tab | Stock screen defaults | RS 100%, 6 months shown, closing range 75%+, monthly return 5%+, EMA on | rs_leaders.py `RS_DEFAULTS` |
 <!-- parameters:end -->
 
 ---
 
-## 12. Change log
+## 13. Change log
+
+**28 Nov 2026 (4)**
+- The Abdullah Dashboard is now part of this website: two new tabs, **Market breadth** (daily trend state of the Nifty 50, Midcap 150 and Smallcap 250, regime, Nifty 500 participation) and **Sector rotation** (Rank(1,3,6) of the sectoral and thematic indices, with the RS screen of their strongest stocks). Same calculations as the dashboard (section 11); the breadth page now reads the stock prices this app already stores instead of downloading 500 histories. The separate dashboard site is unchanged.
 
 **28 Nov 2026 (3)**
 - New backtest defaults, so the agreed setup runs without typing anything: RS threshold 95% (sell below 95%; the buy level follows it, so buy at 95% too), market breadth rule on at 50%, and lending companies plus all other financial companies excluded. Change any of them in the settings before running. The Screener keeps its own defaults.

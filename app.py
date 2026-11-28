@@ -20,8 +20,11 @@ import bt_data
 import bt_engine
 import compare
 import lender_filter
+import market_dash
 import price_snapshot
+import rs_leaders
 import rules_doc
+import sectors
 import settings
 import sweep
 import us_universe
@@ -29,7 +32,7 @@ import us_universe
 # After a git push, Streamlit Cloud reruns this file but can keep the previous copy of these
 # modules in memory. Reload any whose file has changed since it was loaded.
 for _mod in (settings, auth, bt_data, bt_engine, lender_filter, compare, sweep, us_universe, price_snapshot,
-             rules_doc):
+             rules_doc, sectors, rs_leaders, market_dash):
     _mtime = os.path.getmtime(_mod.__file__)
     if getattr(_mod, "_loaded_mtime", None) != _mtime:
         importlib.reload(_mod)
@@ -984,6 +987,105 @@ LOGIN_CSS = """
 """
 
 
+# --- MARKET DASHBOARD: the Market breadth and Sector rotation tabs (engine in market_dash.py, sectors.py,
+# rs_leaders.py, moved from the Abdullah Dashboard). Each page asks for its data; results are kept per visitor.
+@st.cache_data(ttl=3600, show_spinner=False)
+def _md_indices(start, end):
+    return market_dash.load_indices(start, end)
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def _md_nifty500():
+    """Nifty 500 members: the same list the Screener and Backtest use, otherwise the dashboard's own download."""
+    try:
+        df, _ = load_index_constituents("Nifty 500")
+        return df
+    except Exception:
+        return market_dash.load_nifty500_symbols()
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _md_stock_closes(symbols, start, end, cutoff_key):
+    """Daily closes of the Nifty 500 from the app's shared price store (the backtest's Yahoo adjusted prices), so the
+    breadth page does not download 500 histories itself. Falls back to the dashboard's own Yahoo download."""
+    try:
+        store = price_store("IN")
+        store.update(list(symbols), bt_data.last_cutoff(), None, need_date=bt_data.last_session_date())
+        closes = store.panel(list(symbols))["Close"]
+        closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
+        closes = closes[(closes.index >= pd.Timestamp(start)) & (closes.index <= pd.Timestamp(end))]
+        return closes, " (from this app's stored daily prices)"
+    except Exception as e:  # noqa: BLE001
+        return market_dash.load_stock_closes(symbols, start, end), f" (downloaded from Yahoo; stored prices failed: {e})"
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def _md_discovery():
+    return sectors.discover()
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def _md_mapping():
+    return sectors.load_mapping()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _md_index_prices(names, start, end):
+    return sectors.fetch_all(list(names), start, end, _md_mapping())
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def _md_constituents(name, page):
+    fname = sectors.constituent_file(page)
+    return sectors.download_list(fname), fname
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _md_monthly(symbols):
+    return rs_leaders.fetch_monthly(list(symbols))
+
+
+MD_CACHES = (_md_indices, _md_nifty500, _md_stock_closes, _md_discovery, _md_mapping, _md_index_prices,
+             _md_constituents, _md_monthly)
+MD_KEYS = {"mkt_breadth": "md_breadth", "mkt_sectors": "md_sectors", "mkt_drill": "md_drill"}
+
+
+def market_loaders():
+    """The data loaders market_dash.py works with (cached here, so the module has no Streamlit code)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        load_indices=_md_indices, load_nifty500_symbols=_md_nifty500,
+        load_stock_closes=lambda syms, start, end: _md_stock_closes(syms, start, end, bt_data.last_cutoff().isoformat()),
+        discovery=_md_discovery, index_prices=_md_index_prices, constituents=_md_constituents,
+        nbfc_index=load_nbfc_index, lender_cache=basic_industry_cache, monthly=_md_monthly)
+
+
+def run_market(kind, request, step=None):
+    """One request from the Market breadth or Sector rotation tab."""
+    L = market_loaders()
+    if kind == "mkt_breadth":
+        if step:
+            step("Working out market breadth (index trends and the Nifty 500). The first load can take a minute.")
+        return market_dash.breadth_payload(int(request.get("window", 90)), request.get("dtMode", "latch"),
+                                           bool(request.get("useBreadth", True)), L)
+    if kind == "mkt_sectors":
+        if step:
+            step("Ranking the sector and thematic indices from niftyindices.com. The first load can take about a minute.")
+        groups = [g for g in request.get("groups", []) if g in ("Sector", "Theme", "Benchmark")] or ["Sector"]
+        weeks = max(4, min(int(request.get("weeks", 12)), sectors.SECTOR_CFG["max_weeks"]))
+        basis = request.get("basis") if request.get("basis") in ("composite", "r_3m", "away_low") else "composite"
+        return market_dash.sector_payload(groups, weeks, basis, int(request.get("days3m", 90)), L,
+                                          "all" if request.get("scope") == "all" else "major")
+    if kind == "mkt_drill":
+        if step:
+            step("Screening the stocks of the chosen indices with the RS rules.")
+        p = {"threshold": float(request.get("threshold", 100)), "history": int(request.get("history", 6)),
+             "use_ema": bool(request.get("use_ema", True)), "cr": float(request.get("cr", 75)),
+             "mr": float(request.get("mr", 5))}
+        return market_dash.drill_payload(list(request.get("indices", []))[:80], p, bool(request.get("noLenders", True)), L)
+    return {"ok": False, "error": f"Unknown request '{kind}'."}
+
+
 @st.cache_resource
 def attempt_log():
     """Wrong-password counts, shared by everyone using the app (cleared when the app restarts)."""
@@ -1086,6 +1188,10 @@ request = rs_dashboard(
     rulesMd=rules_doc.rules_for_app(),
     cmpResult=st.session_state.get("cmp_result"),
     sweepResult=st.session_state.get("sweep_result"),
+    mktBreadth=st.session_state.get("md_breadth"),
+    mktSectors=st.session_state.get("md_sectors"),
+    mktDrill=st.session_state.get("md_drill"),
+    mktDefaults=market_dash.DEFAULTS,
     user=({"name": current_user, "admin": current_user in login_cfg["admins"],
            # a new "keep me signed in" cookie for the dashboard to store; "" removes it
            "token": st.session_state.get("new_token"), "cookie": auth.COOKIE_NAME,
@@ -1101,6 +1207,13 @@ if request and request.get("nonce") and request["nonce"] != st.session_state.get
     if kind == "tokenSaved":                            # the dashboard has stored (or removed) the cookie
         st.session_state.pop("new_token", None)
         st.rerun()
+    if kind == "mkt_refresh":                           # Market tabs: fetch fresh data instead of the saved copy,
+        for fn in MD_CACHES:                            # then reload the page the request came from
+            fn.clear()
+        for k in MD_KEYS.values():
+            st.session_state.pop(k, None)
+        kind = "mkt_sectors" if request.get("page") == "sectors" else "mkt_breadth"
+        request = {**(request.get("settings") or {}), "nonce": request["nonce"]}
     if kind == "logout":
         for k in ("user", "new_token", "result", "bt_result", "cmp_result", "sweep_result"):
             st.session_state.pop(k, None)
@@ -1121,14 +1234,17 @@ if request and request.get("nonce") and request["nonce"] != st.session_state.get
             outcome = run_compare(request, show_progress, show_step)
         elif kind == "sweep":
             outcome = run_sweep(request, show_progress, show_step)
+        elif kind in MD_KEYS:
+            outcome = run_market(kind, request, show_step)
         else:
             outcome = run_screen(request)
     except Exception as e:
-        what = {"backtest": "backtest", "compare": "comparison", "sweep": "start-month test"}.get(kind, "screen")
+        what = {"backtest": "backtest", "compare": "comparison", "sweep": "start-month test",
+                **{k: "market page" for k in MD_KEYS}}.get(kind, "screen")
         outcome = {"ok": False, "error": f"The {what} stopped with an error: {type(e).__name__}: {e}"}
     progress_slot.empty()
     outcome["nonce"] = request["nonce"]
-    st.session_state[{"backtest": "bt_result", "compare": "cmp_result", "sweep": "sweep_result"}.get(kind, "result")] = outcome
+    st.session_state[{"backtest": "bt_result", "compare": "cmp_result", "sweep": "sweep_result", **MD_KEYS}.get(kind, "result")] = outcome
     st.rerun()
 
 

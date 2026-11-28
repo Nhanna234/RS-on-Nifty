@@ -17,7 +17,10 @@ from pathlib import Path
 import bt_data
 import bt_engine
 import lender_filter
+import market_dash as MD
 import price_snapshot
+import rs_leaders
+import sectors
 import settings as S
 import sweep
 import us_universe
@@ -132,6 +135,33 @@ def parameter_rows() -> list[tuple[str, str, str, str]]:
         ("Start-month test", "Annual return shown for runs of at least", f"{sweep.CAGR_MIN_MONTHS} months",
          "sweep.py `CAGR_MIN_MONTHS`"),
         ("Start-month test", "Most start months in one test", sweep.MAX_SWEEP_RUNS, "sweep.py `MAX_SWEEP_RUNS`"),
+        ("Market breadth tab", "Trend EMAs (fast / slow)", f"{MD.CFG['ema_fast']} / {MD.CFG['ema_slow']} days", "market_dash.py `CFG`"),
+        ("Market breadth tab", "3-month low", f"lowest close of {MD.CFG['lookback']} sessions; fresh low within "
+         f"{MD.CFG['latch']} sessions (default), or within {MD.CFG['tol_pct']:g}%", "market_dash.py `CFG`"),
+        ("Market breadth tab", "Participation", f"% of Nifty 500 above their {MD.CFG['dma']}-day average; "
+         f"{MD.CFG['cross_fast']}-day EMA above {MD.CFG['cross_slow']}-day EMA count", "market_dash.py `CFG`"),
+        ("Market breadth tab", "Breadth zones", ", ".join(f"{lo}%+ {lab}" for lo, lab in MD.CFG["breadth_zones"]),
+         "market_dash.py `CFG`"),
+        ("Market breadth tab", "Confirms / diverges", f"up postures: {MD.CFG['breadth_confirm_up']}%+ / below "
+         f"{MD.CFG['breadth_diverge_up']}%; down postures: {MD.CFG['breadth_confirm_dn']}% or less / "
+         f"{MD.CFG['breadth_diverge_dn']}%+", "market_dash.py `CFG`"),
+        ("Market breadth tab", "Breadth thrust", f"below {MD.CFG['thrust_from']}% to above {MD.CFG['thrust_to']}% "
+         f"within {MD.CFG['thrust_n']} sessions", "market_dash.py `CFG`"),
+        ("Market breadth tab", "Score and breadth change flagged", f"score {MD.CFG['traj_thresh']}+ in "
+         f"{MD.CFG['traj_n']} sessions; breadth {MD.CFG['breadth_delta_pts']}+ points in {MD.CFG['breadth_delta_n']} sessions",
+         "market_dash.py `CFG`"),
+        ("Sector rotation tab", "Rank(1,3,6) weights", f"1M {sectors.SECTOR_CFG['w_1m']}, 3M {sectors.SECTOR_CFG['w_3m']}, "
+         f"6M {sectors.SECTOR_CFG['w_6m']}", "sectors.py `SECTOR_CFG`"),
+        ("Sector rotation tab", "Return look-backs (calendar days)", ", ".join(f"{k} {v}" for k, v in sectors.SECTOR_CFG["days"].items())
+         + f", 3M {sectors.SECTOR_CFG['days_3m_true']} (or {sectors.SECTOR_CFG['days_3m_sheet']} as in the sheet)",
+         "sectors.py `SECTOR_CFG`"),
+        ("Sector rotation tab", "Leaders / moves measured over", f"top {sectors.SECTOR_CFG['top_n']} / "
+         f"{sectors.SECTOR_CFG['move_weeks']} weeks; history up to {sectors.SECTOR_CFG['max_weeks']} weeks",
+         "sectors.py `SECTOR_CFG`"),
+        ("Sector rotation tab", "Stock screen defaults", f"RS {rs_leaders.RS_DEFAULTS['threshold']}%, "
+         f"{rs_leaders.RS_DEFAULTS['history']} months shown, closing range {rs_leaders.RS_DEFAULTS['cr']}%+, "
+         f"monthly return {rs_leaders.RS_DEFAULTS['mr']}%+, EMA {'on' if rs_leaders.RS_DEFAULTS['use_ema'] else 'off'}",
+         "rs_leaders.py `RS_DEFAULTS`"),
     ]
 
 

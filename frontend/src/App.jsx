@@ -4,6 +4,7 @@ import { SAMPLE_ARGS, sampleResult } from "./sample";
 import { num, signedPct, plural, downloadBlob, copyText, useWidth } from "./util";
 import Backtest from "./Backtest.jsx";
 import Rules from "./Rules.jsx";
+import Market from "./dash/Market.jsx";
 import { LenderControl, LenderNote, useLenderSettings } from "./Lenders.jsx";
 
 /* ---------- app shell ---------- */
@@ -68,6 +69,54 @@ export default function App() {
     sendValue({ nonce: `o-${Date.now().toString(36)}`, kind: "logout" });
   };
 
+  /* ---------- Market breadth and Sector rotation tabs (moved from the Abdullah Dashboard) ---------- */
+  const [dashPending, setDashPending] = useState({}); // page kind -> nonce
+  const queued = useRef([]);
+  const dashArgs = {
+    breadth: args?.mktBreadth || null,
+    sectors: args?.mktSectors || null,
+    drill: args?.mktDrill || null,
+    defaults: args?.mktDefaults || null,
+  };
+  // a request is finished when its answer (same nonce) comes back
+  useEffect(() => {
+    setDashPending((p) => {
+      const next = { ...p };
+      let changed = false;
+      for (const k of Object.keys(p)) {
+        if (dashArgs[k] && dashArgs[k].nonce === p[k]) {
+          delete next[k];
+          changed = true;
+        }
+      }
+      return changed ? next : p;
+    });
+  }, [args]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sendDash = (kind, payload) => {
+    const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    // a refresh reloads the page it came from, so that page waits for the answer
+    const waits = kind === "refresh" ? payload.page : kind;
+    setDashPending((p) => ({ ...p, [waits]: nonce }));
+    if (embedded) sendValue({ nonce, kind: `mkt_${kind}`, ...payload });
+  };
+  const ask = (kind, payload = {}) => {
+    if (kind === "goto") return setTab(payload.page === "sectors" ? "sectors" : "breadth");
+    // never interrupt a running screen or backtest: send the request once it has finished
+    if (running) {
+      queued.current.push([kind, payload]);
+      setDashPending((p) => ({ ...p, [kind === "refresh" ? payload.page : kind]: "queued" }));
+      return undefined;
+    }
+    return sendDash(kind, payload);
+  };
+  useEffect(() => {
+    if (running || !queued.current.length) return;
+    const [kind, payload] = queued.current.pop();
+    queued.current = [];
+    sendDash(kind, payload);
+  }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dashBusy = Object.keys(dashPending).length > 0;
+
   const screenRunning = running?.kind === "screen";
   const btRunning = running?.kind === "backtest";
 
@@ -82,13 +131,20 @@ export default function App() {
           <button type="button" className={tab === "backtest" ? "on" : ""} aria-current={tab === "backtest"} onClick={() => setTab("backtest")}>
             Backtest
           </button>
+          <button type="button" className={tab === "breadth" ? "on" : ""} aria-current={tab === "breadth"} onClick={() => setTab("breadth")}>
+            Market breadth
+          </button>
+          <button type="button" className={tab === "sectors" ? "on" : ""} aria-current={tab === "sectors"} onClick={() => setTab("sectors")}>
+            Sector rotation
+          </button>
           <button type="button" className={tab === "rules" ? "on" : ""} aria-current={tab === "rules"} onClick={() => setTab("rules")}>
             Rules
           </button>
         </nav>
         <p className="masthead-note">
-          Relative strength against the Nifty 50 (the S&amp;P 500 for the Nasdaq 100), from month-end closes. Prices from Yahoo
-          Finance.
+          {tab === "breadth" || tab === "sectors"
+            ? "Daily trend, breadth and sector rotation of the Indian market. Index closes from niftyindices.com, stock prices from Yahoo Finance."
+            : "Relative strength against the Nifty 50 (the S&P 500 for the Nasdaq 100), from month-end closes. Prices from Yahoo Finance."}
         </p>
         {user && (
           <div className="account">
@@ -104,6 +160,8 @@ export default function App() {
 
       {!args ? (
         <p className="quiet-note">Loading the screen…</p>
+      ) : tab === "breadth" || tab === "sectors" ? (
+        <Market page={tab} args={dashArgs} ask={ask} pending={dashPending} />
       ) : tab === "rules" ? (
         <Rules markdown={args.rulesMd} />
       ) : tab === "backtest" ? (
@@ -112,7 +170,7 @@ export default function App() {
           defaults={args.btDefaults}
           result={btResult}
           running={btRunning}
-          busy={Boolean(running)}
+          busy={Boolean(running) || dashBusy}
           onRun={(settings, files) => run("backtest", settings, files)}
           cmpResult={cmpResult}
           cmpRunning={running?.kind === "compare"}
@@ -123,7 +181,7 @@ export default function App() {
         />
       ) : (
         <>
-          <Controls indices={args.indices} defaults={args.defaults} running={Boolean(running)} onRun={(st, f) => run("screen", st, f)} />
+          <Controls indices={args.indices} defaults={args.defaults} running={Boolean(running) || dashBusy} onRun={(st, f) => run("screen", st, f)} />
           {screenRunning && (
             <div className="banner banner-run" role="status">
               <span className="pulse-dot" aria-hidden="true" />
