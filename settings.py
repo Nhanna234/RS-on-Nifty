@@ -55,7 +55,7 @@ RS_INDEX_TICKER = MARKETS["IN"]["rs_index"]  # Nifty 50 price index on Yahoo: th
 
 # ---- backtest
 BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 95, "useEma": True,
-               "cr": 75, "mr": 5, "cost": 0.2, "cashYield": 6, "capital": 1000000, "ranking": "cr",
+               "cr": 75, "mr": 5, "cost": 1.0, "cashYield": 6, "capital": 1000000, "ranking": "cr",
                "excludeLenders": True,
     # backtest tab: also leave out every other Financial Services company (RULES.md 1.4); the screener keeps its own default
     "excludeFinancials": True,

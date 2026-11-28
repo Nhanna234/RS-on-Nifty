@@ -128,6 +128,7 @@ A held stock is **never swapped** for a better candidate. It stays until a sell 
 - Portfolio value at the open = cash + held shares at the opening price.
 - Each new stock gets **1/slots of that value**, paid from cash. If less cash is left, it gets what is left; if that is less than 20% of a slot's money, the stock is not bought ("Not bought for lack of cash").
 - Shares bought = amount × (1 − cost) ÷ the first open. Part-shares are allowed.
+- **Cost** is charged on every buy and every sell; the default is **1% each side** (about 2% for a round trip). It stands for brokerage, STT, exchange and stamp charges plus the gap between the price the backtest uses and the price actually got (spread, slippage and impact cost, which are largest in small and micro caps). The research note of 28 Nov 2026 shows how results change between 0% and 2%.
 - Holdings are **not rebalanced**: winners keep growing; nothing is trimmed.
 
 **4.6 Cash.** Empty slots and leftover money stay in cash, which earns the cash yield (the yearly rate converted to a monthly rate) every month.
@@ -326,7 +327,7 @@ The values the code uses. This section is generated from the code; the website a
 | Setup A | Second chance switched on | On | settings.py `BT_DEFAULTS` |
 | Setup A | Second chance: after a month-end close below this share of the highest close | 95% | settings.py `BT_DEFAULTS` |
 | Setup A | Second chance: within this many months of Setup A | 12 months | settings.py `BT_DEFAULTS` |
-| Backtest | Cost per buy and per sell | 0.2% | settings.py `BT_DEFAULTS` |
+| Backtest | Cost per buy and per sell | 1% | settings.py `BT_DEFAULTS` |
 | Backtest | Yield on cash | 6% a year | settings.py `BT_DEFAULTS` |
 | Backtest | Starting capital | ₹1,000,000 | settings.py `BT_DEFAULTS` |
 | Backtest | Starting capital, Nasdaq 100 and US lists | $10,000 | settings.py `MARKETS` |
@@ -366,6 +367,9 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 13. Change log
+
+**28 Nov 2026 (6)**
+- The default **cost per buy / sell** is now **1%** (was 0.2%). 0.2% roughly covers brokerage and taxes on large caps, but the strategy buys mostly small and mid caps at the opening price, where the spread and the opening gap usually cost more. 1% each side is a deliberately cautious figure. You can still type any value.
 
 **28 Nov 2026 (5)**
 - The **Buy at RS** and **RS threshold (sell below)** boxes are now fully separate. Before, the buy box followed the sell box and jumped back to the sell value when it was cleared, so a different buy level could not be typed in. Both start at 95%. A buy level below the sell level is still replaced by the sell level.

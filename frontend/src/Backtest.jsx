@@ -173,7 +173,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         cr: n(s.cr, 0, 100, 75),
         mr: n(s.mr, 0, 100, 5),
         ranking: s.ranking,
-        cost: n(s.cost, 0, 5, 0.2),
+        cost: n(s.cost, 0, 5, defaults.cost ?? 1),
         cashYield: n(s.cashYield, 0, 20, 6),
         capital: n(s.capital, 1000, 1e12, marketInfo(s.index).capital),
         entry: s.entry === "breakout" ? "breakout" : "rs",
