@@ -26,7 +26,7 @@ Any other index that fails to download stops the run with a message.
 - Insurers, fund houses, brokers, exchanges, depositories, rating agencies, fintech, holding companies and investment companies are **not** lenders under this rule and stay in.
 - The Basic Industry is read from NSE's quote data, only for stocks whose broad sector is Financial Services, and kept for 30 days.
 - If NSE does not answer, these fallback rules decide instead, and the results say so: "Bank" in the company name; membership of NSE's Nifty NBFC index; housing-finance or lending words in the company name (excluding names with insurance, asset management, holding, exchange, depository, registrar, broking or securities); a short list of government financial institutions (see Parameters).
-- **And all other financial companies (tick box, off by default).** With it ticked, every company in NSE's Financial Services sector is left out, not only lenders: insurers, fund houses, brokers, exchanges, depositories, rating agencies, fintech, holding and investment companies too. It works in both tabs and in the start-month test (6.2).
+- **And all other financial companies (tick box; ticked by default in the Backtest tab, unticked in the Screener).** With it ticked, every company in NSE's Financial Services sector is left out, not only lenders: insurers, fund houses, brokers, exchanges, depositories, rating agencies, fintech, holding and investment companies too. It works in both tabs and in the start-month test (6.2).
 - Your **Always exclude** and **Never exclude** symbol lists override everything above. They are remembered in your browser. The Always exclude list removes any stock you name, financial or not (for example `DIACABS, CUPID`).
 - Every run lists the companies left out and the other financial companies kept, with the source of each decision.
 - For US stocks the industry in the stock list decides instead (for the Nasdaq 100, its ICB industry and subsector): a stock is a lender when that industry names a bank, a consumer or commercial lender, a mortgage lender or mortgage REIT, or a savings institution. The Nasdaq-100's own rules already leave out financial companies, so for that index the filter normally removes nothing; it matters for an uploaded US list. The Always and Never exclude lists work the same way.
@@ -242,7 +242,7 @@ These are recommendations for following the strategy with real money. The code d
 | Ranking | None (sorted for display) | Closing range (or chosen ranking), then RS ratio, then monthly return |
 | History needed | 13 month-ends | 12 month-ends |
 | Prices | 3 years of Yahoo monthly prices | Daily prices from 2010, cleaned, turned into monthly candles |
-| Default RS threshold | 100% | 98% |
+| Default RS threshold | 100% | 95% (buy level 95% too) |
 
 Use the backtest's orders panel, not the screener, for the stocks to buy.
 
@@ -277,7 +277,7 @@ The values the code uses. This section is generated from the code; the website a
 | Backtest | Default end month | the last completed month | bt_data.py `last_completed_month` |
 | Backtest | Earliest start month | 2012-01 | bt_data.py `EARLIEST_START` |
 | Backtest | Stocks held (slots) | 10 | settings.py `BT_DEFAULTS` |
-| Backtest | RS threshold (sell below it) | 98% | settings.py `BT_DEFAULTS` |
+| Backtest | RS threshold (sell below it) | 95% | settings.py `BT_DEFAULTS` |
 | Backtest | RS rule: buy when RS is at least | same as the RS threshold | settings.py `BT_DEFAULTS` `buyThreshold` |
 | Backtest | Market breadth rule (sell everything, buy nothing) | on: when breadth is below 50% and lower than a month earlier; breadth = share of the universe's stocks closing at or above their 12-month EMA | settings.py `BT_DEFAULTS` `breadthRule`, `breadthLevel` |
 | Backtest | Price above 12-month EMA (entry and exit) | On | settings.py `BT_DEFAULTS` |
@@ -320,6 +320,9 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 12. Change log
+
+**28 Nov 2026 (3)**
+- New backtest defaults, so the agreed setup runs without typing anything: RS threshold 95% (sell below 95%; the buy level follows it, so buy at 95% too), market breadth rule on at 50%, and lending companies plus all other financial companies excluded. Change any of them in the settings before running. The Screener keeps its own defaults.
 
 **28 Nov 2026 (2)**
 - New **market breadth rule**, on by default (4.13): at a month-end when fewer than 50% of the universe's stocks close at or above their 12-month EMA **and** that share is lower than a month earlier, sell everything at the next open and buy nothing; back to the normal rules as soon as breadth is 50% or more, or rising. In testing (Nifty Total Market, 2016–2026 starts) it cut the usual worst fall from about −27% to between −12% and −17%, with about the same returns. The orders panel and the running month show breadth and the decision; results and Excel show a breadth table. Switch it off, or change the 50% level, in the backtest settings.

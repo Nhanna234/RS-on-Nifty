@@ -678,7 +678,7 @@ def prepare_backtest(req, progress=None):
 
     p = {
         "slots": int(min(50, max(1, int(req.get("slots", 10))))),
-        "threshold": min(100.0, max(50.0, float(req.get("threshold", 98)))) / 100.0,
+        "threshold": min(100.0, max(50.0, float(req.get("threshold", BT_DEFAULTS["threshold"])))) / 100.0,
         "use_ema": bool(req.get("useEma", True)),
         "cr_min": float(req.get("cr", 75)), "mr_min": float(req.get("mr", 5)),
         "cost": max(0.0, float(req.get("cost", 0.2))) / 100.0,
@@ -888,7 +888,7 @@ def run_compare(req, progress=None, step=None):
 
     p = {
         "slots": int(min(50, max(1, int(req.get("slots", 10))))),
-        "threshold": min(100.0, max(50.0, float(req.get("threshold", 98)))) / 100.0,
+        "threshold": min(100.0, max(50.0, float(req.get("threshold", BT_DEFAULTS["threshold"])))) / 100.0,
         "use_ema": bool(req.get("useEma", True)),
         "cr_min": float(req.get("cr", 75)), "mr_min": float(req.get("mr", 5)),
         "cost": max(0.0, float(req.get("cost", 0.2))) / 100.0,

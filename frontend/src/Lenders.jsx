@@ -62,8 +62,8 @@ export function LenderControl({ value, onChange, idPrefix }) {
   );
 }
 
-export function useLenderSettings(defaultOn = true) {
-  const [v, setV] = useState(() => ({ excludeLenders: defaultOn, excludeFinancials: false, ...loadOverrides() }));
+export function useLenderSettings(defaultOn = true, defaultFinancials = false) {
+  const [v, setV] = useState(() => ({ excludeLenders: defaultOn, excludeFinancials: defaultFinancials, ...loadOverrides() }));
   // pick up list edits made in the other tab
   useEffect(() => {
     const onStorage = (e) => e.key === KEY && setV((cur) => ({ ...cur, ...loadOverrides() }));

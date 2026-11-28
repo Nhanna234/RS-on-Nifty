@@ -54,9 +54,11 @@ WEEKLY_CR_REQ = 75            # weekly drill-down: latest week's closing range m
 RS_INDEX_TICKER = MARKETS["IN"]["rs_index"]  # Nifty 50 price index on Yahoo: the denominator of relative strength
 
 # ---- backtest
-BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 98, "useEma": True,
+BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 95, "useEma": True,
                "cr": 75, "mr": 5, "cost": 0.2, "cashYield": 6, "capital": 1000000, "ranking": "cr",
                "excludeLenders": True,
+    # backtest tab: also leave out every other Financial Services company (RULES.md 1.4); the screener keeps its own default
+    "excludeFinancials": True,
     # RS rule: buy only when RS is at least this % (None = same as "threshold", the selling level)
     "buyThreshold": None,
     # market breadth rule (RULES.md 4.13): sell everything and buy nothing at a month-end when breadth is below this %

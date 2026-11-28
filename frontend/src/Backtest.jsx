@@ -125,7 +125,7 @@ export default function Backtest({
 function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRunning, onSweep, sweepRunning }) {
   const [s, setS] = useState(defaults);
   const [files, setFiles] = useState([]);
-  const [lend, setLend] = useLenderSettings(defaults.excludeLenders !== false);
+  const [lend, setLend] = useLenderSettings(defaults.excludeLenders !== false, defaults.excludeFinancials === true);
   const fileInput = useRef(null);
   const marketOf = (name) => (defaults.indexMarkets || {})[name] || "IN";
   const marketInfo = (name) => (defaults.markets || {})[marketOf(name)] || { currency: "INR", capital: 1000000 };
@@ -166,9 +166,9 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         start: s.start,
         end: s.end,
         slots: Math.round(n(s.slots, 1, 50, 10)),
-        threshold: n(s.threshold, 50, 100, 98),
+        threshold: n(s.threshold, 50, 100, defaults.threshold ?? 95),
         // empty = buy at the same RS as the selling threshold; never below it
-        buyThreshold: buyLinked ? null : Math.max(n(s.threshold, 50, 100, 98), n(s.buyThreshold, 50, 100, 100)),
+        buyThreshold: buyLinked ? null : Math.max(n(s.threshold, 50, 100, defaults.threshold ?? 95), n(s.buyThreshold, 50, 100, 100)),
         useEma: Boolean(s.useEma),
         cr: n(s.cr, 0, 100, 75),
         mr: n(s.mr, 0, 100, 5),
