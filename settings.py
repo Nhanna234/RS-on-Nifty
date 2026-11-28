@@ -59,6 +59,9 @@ BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "thresho
                "excludeLenders": True,
     # RS rule: buy only when RS is at least this % (None = same as "threshold", the selling level)
     "buyThreshold": None,
+    # market breadth rule (RULES.md 4.13): sell everything and buy nothing at a month-end when breadth is below this %
+    # and lower than a month earlier
+    "breadthRule": True, "breadthLevel": 50,
                # entry rule: "rs" (the RS rule) or "breakout" (Setup A with its second chance, RULES.md 4.12)
                "entry": "rs", "nearHigh": 95, "quiet": 12, "second": True, "reset": 95, "window": 12}
 

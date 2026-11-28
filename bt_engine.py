@@ -11,6 +11,8 @@ ENTRY     : RS ratio = 100%, or RS ratio >= the buy threshold (default: the RS t
 RANKING   : when there are more candidates than empty slots: closing range (or 6- / 12-month
             return), then RS ratio, then month return, highest first.
 EXIT      : RS ratio below the minimum threshold, or close below the 12-month EMA (if switched on).
+BREADTH   : if switched on, at a month-end when market breadth (share of the universe's stocks closing at or above
+            their 12-month EMA) is below the level and lower than the month before, sell everything and buy nothing.
             A held stock is never swapped for a better candidate.
 PORTFOLIO : `slots` slots. Each new stock gets 1/slots of the portfolio value at that open,
             paid from cash; holdings are not rebalanced afterwards. Empty slots stay in cash,
@@ -108,6 +110,45 @@ def indicators(m: dict, rs_index: pd.Series) -> dict:
         "exec_px": m["Open"].shift(-1),                # next month's first open
         "last_close": C.ffill(),
     }
+
+
+def breadth(ind: dict) -> pd.Series:
+    """Market breadth at each month-end: the share of the universe's stocks with a close that month whose close is at
+    or above their 12-month EMA (RULES.md 4.13). Worked out from ind itself, so a sliced universe gets its own."""
+    key = ("_breadth",)
+    if key not in ind:
+        C, ema = ind["C"], ind["ema"]
+        have = C.notna()
+        n = have.sum(axis=1)
+        ind[key] = ((C >= ema) & have).sum(axis=1).div(n.where(n > 0))
+    return ind[key]
+
+
+def breadth_reason(p: dict) -> str:
+    return f"Market breadth below {p['breadth_level'] * 100:g}% and falling"
+
+
+def risk_off(ind: dict, p: dict, t: pd.Period) -> bool:
+    """True when the breadth rule is on and, at the month-end t, breadth is below the level and lower than at the
+    month-end before (RULES.md 4.13): everything is sold at the next open and nothing is bought."""
+    if not p.get("breadth_rule"):
+        return False
+    b = breadth(ind)
+    if t not in b.index or (t - 1) not in b.index:
+        return False
+    now, prev = b.at[t], b.at[t - 1]
+    return bool(pd.notna(now) and pd.notna(prev) and now < p["breadth_level"] and now < prev)
+
+
+def breadth_info(ind: dict, p: dict, t: pd.Period) -> dict:
+    """Breadth at t and the month-end before, and what the rule decides, for the orders panel and the live view."""
+    b = breadth(ind)
+    now = b.get(t)
+    prev = b.get(t - 1)
+    return {"on": bool(p.get("breadth_rule")), "level": _f(p.get("breadth_level", 0.5)),
+            "now": _f(now) if now is not None and pd.notna(now) else None,
+            "prev": _f(prev) if prev is not None and pd.notna(prev) else None,
+            "riskOff": risk_off(ind, p, t), "month": t.strftime("%b %Y")}
 
 
 def eligible(ind: dict, p: dict, need_next_open: bool = True) -> pd.DataFrame:
@@ -241,7 +282,11 @@ def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sect
         nxt = t + 1
         # ---- decisions at the close of month t
         exits = [(s, why) for s in pos if (why := exit_reason(ind, p, t, s))]
-        free = slots - (len(pos) - len(exits))
+        off = risk_off(ind, p, t)
+        if off:                                    # breadth rule: everything goes, nothing is bought
+            named = dict(exits)
+            exits = [(s, named.get(s) or breadth_reason(p)) for s in pos]
+        free = 0 if off else slots - (len(pos) - len(exits))
         out = {s for s, _ in exits}
         picks, qualified = entry_picks(sig, ind, p, t, {s: ps["setup"] for s, ps in pos.items() if s not in out},
                                        free, exclude=out)
@@ -300,6 +345,7 @@ def simulate(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, sect
             "period": nxt, "held": sorted(held_rows, key=lambda h: -h["weight"]),
             "entered": entered, "exited": exited, "skipped": skipped, "setups": setups,
             "candidates": len(cands), "cash": cash / total if total else 1.0,
+            "riskOff": off, "breadth": float(breadth(ind).get(t, np.nan)),
         })
 
     for s, ps in pos.items():                       # positions still open at the end
@@ -341,12 +387,13 @@ def live_view(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, cur
 
     # what the rules would do at the next open if this month closed at the latest prices
     keep_syms = [h["symbol"] for h in mo["held"]]
+    off = risk_off(ind, p, cur)
     exits = []
     for s in keep_syms:
-        why = exit_reason(ind, p, cur, s)
+        why = exit_reason(ind, p, cur, s) or (breadth_reason(p) if off else None)
         if why:
             exits.append({"symbol": s, "reason": why, "ratio": _f(ind["ratio"].at[cur, s])})
-    free = int(p["slots"]) - (len(keep_syms) - len(exits))
+    free = 0 if off else int(p["slots"]) - (len(keep_syms) - len(exits))
     out = {e["symbol"] for e in exits}
     picks, qualified = entry_picks(entry_signals(ind, p, need_next_open=False), ind, p, cur,
                                    {h["symbol"]: h["setup"] for h in mo["held"] if h["symbol"] not in out}, free,
@@ -369,6 +416,7 @@ def live_view(m: dict, ind: dict, p: dict, start: pd.Period, end: pd.Period, cur
         "next": {"exits": exits, "buys": [info(x) for x in picks],
                  "reserve": [info(x) for x in rest[:5]],
                  "free": max(0, free), "qualified": len(qualified)},
+        "breadth": breadth_info(ind, p, cur), "heldRiskOff": bool(mo.get("riskOff")),
     }
 
 
@@ -383,6 +431,7 @@ def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors:
     sig = entry_signals(ind, p, need_next_open=False)
     C = ind["C"]
     setup_of = {}
+    off = risk_off(ind, p, end)                    # breadth rule: sell everything, buy nothing
 
     def info(s):
         close = C.at[end, s]
@@ -390,7 +439,7 @@ def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors:
                 "ratio": _f(ind["ratio"].at[end, s]), "cr": _f(ind["cr"].at[end, s]), "ret": _f(ind["ret"].at[end, s]),
                 "rank": _f(ind[p.get("ranking", "cr")].at[end, s])}
 
-    fresh_picks, qualified = entry_picks(sig, ind, p, end, {}, slots)
+    fresh_picks, qualified = entry_picks(sig, ind, p, end, {}, 0 if off else slots)
     setup_of.update({s: k for s, k in qualified})
     ranked_all = [s for s, _ in qualified]
     fresh_syms = [s for s, _ in fresh_picks]
@@ -410,13 +459,13 @@ def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors:
     setup_of.update({s: h["setup"] for s, h in held.items()})
     sells, keeps = [], []
     for s, h in held.items():
-        why = exit_reason(ind, p, end, s)
+        why = exit_reason(ind, p, end, s) or (breadth_reason(p) if off else None)
         row = {**info(s), "weight": _f(h["weight"])}
         if why:
             sells.append({**row, "reason": why})
         else:
             keeps.append(row)
-    free = slots - len(keeps)
+    free = 0 if off else slots - len(keeps)
     cash_share = last["cash"] + sum(x["weight"] or 0 for x in sells) * (1 - p["cost"])
     cont_picks, cont_q = entry_picks(sig, ind, p, end, {r["symbol"]: held[r["symbol"]]["setup"] for r in keeps}, free,
                                      exclude={r["symbol"] for r in sells})
@@ -435,7 +484,7 @@ def next_orders(m: dict, ind: dict, p: dict, sim: dict, end: pd.Period, sectors:
 
     return {
         "decidedAt": end.strftime("%b %Y"), "executeIn": (end + 1).strftime("%b %Y"),
-        "qualified": len(ranked_all),
+        "qualified": len(ranked_all), "breadth": breadth_info(ind, p, end),
         "fresh": {"buys": fresh, "reserve": [info(s) for s in ranked_all if s not in fresh_syms][:5],
                   "capital": _f(p["capital"], 0), "perStock": _f(alloc, 0), "slots": slots},
         "continue": {"sells": sells, "keeps": sorted(keeps, key=lambda r: -(r["weight"] or 0)), "buys": buys,
@@ -565,8 +614,11 @@ def build_report(sim: dict, bench: pd.Series, p: dict, start: pd.Period, end: pd
                            "avgMonths": _f(sum(t["months"] for t in closed) / len(closed), 1) if closed else None,
                            "profit": _f(sum(t["proceeds"] - t["invested"] for t in tk), 0)}
 
+    # market breadth at each decision month-end (the month before each row's period) and what the rule decided
+    bseries = breadth_history(sim, p)
     sstats = series_stats(eq, p["cash_yield"])
     return {
+        "breadth": bseries,
         "curve": curve,
         "strategy": {k: _f(v) for k, v in sstats.items()},
         "benchmark": {k: _f(v) for k, v in series_stats(bvals, p["cash_yield"]).items()} if has_bench else None,
@@ -577,6 +629,25 @@ def build_report(sim: dict, bench: pd.Series, p: dict, start: pd.Period, end: pd
         "finalValue": _f(eq.iloc[-1], 0), "capital": _f(eq.iloc[0], 0),
         "benchFinal": _f(bvals.iloc[-1], 0) if has_bench else None,
     }
+
+
+def breadth_history(sim: dict, p: dict) -> dict:
+    """Breadth at each month-end the backtest decided at, with the decision; and how often the rule sold out."""
+    rows, prev_off, switches = [], False, 0
+    for x in sim["months"]:
+        dec = x["period"] - 1
+        off = bool(x.get("riskOff"))
+        switches += off != prev_off
+        prev_off = off
+        rows.append({"m": label(dec), "b": _f(x.get("breadth")), "off": off})
+    for i in range(1, len(rows)):
+        b0, b1 = rows[i - 1]["b"], rows[i]["b"]
+        rows[i]["chg"] = _f(b1 - b0) if b0 is not None and b1 is not None else None
+    if rows:
+        rows[0]["chg"] = None
+    n_off = sum(r["off"] for r in rows)
+    return {"on": bool(p.get("breadth_rule")), "level": _f(p.get("breadth_level", 0.5)), "rows": rows,
+            "monthsOff": n_off, "share": _f(n_off / len(rows)) if rows else None, "switches": switches}
 
 
 def to_excel(report: dict, settings_rows: list[tuple]) -> bytes:
@@ -614,8 +685,14 @@ def to_excel(report: dict, settings_rows: list[tuple]) -> bytes:
                        "Entry setup": h.get("setup", "RS")}
                       for mo in report["months"] for h in mo["held"]]
                      ).to_excel(xw, sheet_name="Holdings", index=False)
+        br = report.get("breadth") or {}
+        if br.get("rows"):
+            on = br.get("on")
+            pd.DataFrame([{"Decision month-end": r["m"], "Market breadth": r["b"], "Change vs month before": r.get("chg"),
+                           "Breadth rule": ("Sell everything, buy nothing" if r["off"] else "Normal rules") if on else "Switched off"}
+                          for r in br["rows"]]).to_excel(xw, sheet_name="Market breadth", index=False)
 
-        pct_cols = {"Monthly": "DEF", "Trades": "G", "Holdings": "DE"}
+        pct_cols = {"Monthly": "DEF", "Trades": "G", "Holdings": "DE", "Market breadth": "BC"}
         ws = xw.sheets["Summary"]
         for r_i, (_, key) in enumerate(names, start=2):           # strategy vs benchmark block
             if key != "sharpe":

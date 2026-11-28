@@ -182,6 +182,8 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         second: s.second !== false,
         reset: n(s.reset, 50, 100, 95),
         window: Math.round(n(s.window, 1, 36, 12)),
+        breadthRule: s.breadthRule !== false,
+        breadthLevel: n(s.breadthLevel, 10, 90, 50),
         ...lend,
       };
   };
@@ -330,7 +332,18 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         <label htmlFor="b-cap">Starting capital {curSym(marketInfo(s.index).currency)}</label>
         <input id="b-cap" type="number" min="1000" step="1000" value={s.capital} onChange={set("capital")} />
       </div>
+      <div className="field">
+        <label htmlFor="b-breadth" title="Market breadth: the share of the universe's stocks whose month-end close is at or above their 12-month EMA">
+          Market breadth level %
+        </label>
+        <input id="b-breadth" type="number" min="10" max="90" step="1" value={s.breadthLevel ?? 50} onChange={set("breadthLevel")} disabled={s.breadthRule === false} />
+      </div>
       <div className="field field-switches">
+        <label className="switch" title="At a month-end when breadth is below the level and lower than a month earlier, sell everything at the next open and buy nothing">
+          <input type="checkbox" checked={s.breadthRule !== false} onChange={set("breadthRule")} />
+          <span className="switch-track" aria-hidden="true" />
+          Market breadth rule: sell all when breadth is below {s.breadthLevel ?? 50}% and falling
+        </label>
         <label className="switch">
           <input type="checkbox" checked={Boolean(s.useEma)} onChange={set("useEma")} />
           <span className="switch-track" aria-hidden="true" />
@@ -525,7 +538,9 @@ function BtResults({ result, dimmed }) {
         {period.start} to {period.end}, {period.months} months. Entry: {settings.entryLabel || "RS rule"}
         {settings.entry !== "breakout" && settings.buyThreshold > settings.threshold ? `, buying at RS ${num(settings.buyThreshold, 1)}% or more` : ""}. Holding up to {settings.slots} stocks, RS threshold{" "}
         {num(settings.threshold, 1)}% (sell below), ranked by {settings.rankingLabel.toLowerCase()}, {num(settings.cost, 2)}% cost per buy and
-        per sell. Benchmark: {result.benchmarkSource}. Run at {result.asOf}.
+        per sell. Market breadth rule:{" "}
+        {settings.breadthRule ? `on, sell all when breadth is below ${num(settings.breadthLevel, 0)}% and falling` : "off"}. Benchmark:{" "}
+        {result.benchmarkSource}. Run at {result.asOf}.
       </p>
       <LenderNote lenders={result.lenders} />
       <Caveats result={result} />
@@ -563,6 +578,12 @@ function BtResults({ result, dimmed }) {
           <MonthHoldings months={r.months} curve={curve} sel={sel} onSel={setSel} slots={settings.slots} />
         </section>
       </div>
+
+      {r.breadth && r.breadth.rows && r.breadth.rows.length > 0 && (
+        <section className="panel">
+          <BreadthPanel br={r.breadth} latest={result.orders && result.orders.breadth} />
+        </section>
+      )}
 
       <section className="panel">
         <TradeStats t={r.tradeStats} bySetup={r.bySetup} />
@@ -1052,6 +1073,8 @@ function LiveMonth({ live, slots, benchShort, rankingLabel }) {
         </dl>
       </div>
 
+      {live.breadth && <BreadthBanner b={live.breadth} provisional />}
+
       <div className="live-grid">
         <div>
           <h4>
@@ -1135,6 +1158,87 @@ function LiveMonth({ live, slots, benchShort, rankingLabel }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ---------- market breadth ---------- */
+function BreadthBanner({ b, provisional }) {
+  if (b.now == null) return null;
+  const level = num(b.level * 100, 0);
+  const change = b.prev != null ? ` (${pct(b.prev, 0)} a month earlier)` : "";
+  const when = provisional ? `If ${b.month} closed at the latest prices, market breadth would be` : `Market breadth at the ${b.month} close:`;
+  let verdict;
+  if (!b.on) verdict = "The market breadth rule is switched off.";
+  else if (b.riskOff)
+    verdict = provisional
+      ? `That is below ${level}% and falling, so the breadth rule would sell everything at the next open and buy nothing.`
+      : `Below ${level}% and falling: the breadth rule says sell everything at the next open and buy nothing.`;
+  else verdict = `Not below ${level}% and falling, so the normal rules apply.`;
+  return (
+    <div className={`banner ${b.on && b.riskOff ? "banner-warn" : "banner-note"}`} role="status">
+      <span>
+        <strong>
+          {when} {pct(b.now, 0)}
+        </strong>
+        {change}. {verdict}
+      </span>
+    </div>
+  );
+}
+
+function BreadthPanel({ br, latest }) {
+  const [all, setAll] = useState(false);
+  const rows = [...br.rows].reverse();
+  // the last month-end (the one the orders panel is decided at) is not part of the backtest's own months
+  if (latest && latest.now != null) {
+    const [mon, yr] = latest.month.split(" ");
+    const key = `${mon}-${yr.slice(2)}`;
+    if (!rows.length || rows[0].m !== key)
+      rows.unshift({ m: key, b: latest.now, chg: latest.prev != null ? latest.now - latest.prev : null, off: latest.riskOff, latest: true });
+  }
+  const shown = all ? rows : rows.slice(0, 24);
+  const level = num(br.level * 100, 0);
+  return (
+    <div className="breadth">
+      <div className="panel-head">
+        <h3>Market breadth</h3>
+      </div>
+      <p className="chart-hint">
+        The share of the universe's stocks whose month-end close is at or above their 12-month EMA, at each month-end the
+        backtest decided at.{" "}
+        {br.on
+          ? `The breadth rule (sell everything when breadth is below ${level}% and lower than a month earlier) sold out at ${br.monthsOff} of ${br.rows.length} month-ends (${pct(br.share, 0)}) and switched between invested and cash ${br.switches} times.`
+          : `The breadth rule was switched off for this run; it would sell everything when breadth is below ${level}% and falling.`}
+      </p>
+      <table className="log breadth-table">
+        <thead>
+          <tr>
+            <th scope="col">Month-end</th>
+            <th scope="col" className="num">Breadth</th>
+            <th scope="col" className="num">Change</th>
+            <th scope="col">Decision for the next month</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((r) => (
+            <tr key={r.m} className={br.on && r.off ? "row-off" : ""}>
+              <th scope="row">
+                {r.m}
+                {r.latest ? <span className="tag-latest">orders</span> : null}
+              </th>
+              <td className="num">{pct(r.b, 0)}</td>
+              <td className={`num${r.chg < 0 ? " neg" : ""}`}>{r.chg == null ? "–" : `${r.chg > 0 ? "+" : ""}${num(r.chg * 100, 0)} pts`}</td>
+              <td>{br.on ? (r.off ? "Sell everything, buy nothing" : "Normal rules") : r.b != null && r.b < br.level && r.chg < 0 ? "Rule off (would have sold)" : "Rule off"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > 24 && (
+        <button type="button" className="link-btn" onClick={() => setAll((v) => !v)}>
+          {all ? "Show the last 24 months" : `Show all ${rows.length} months`}
+        </button>
+      )}
     </div>
   );
 }
@@ -1228,6 +1332,8 @@ function Orders({ o, rankingLabel }) {
         </div>
       )}
 
+      {o.breadth && <BreadthBanner b={o.breadth} />}
+
       {mode === "fresh" ? (
         <>
           <p className="orders-note">
@@ -1239,7 +1345,13 @@ function Orders({ o, rankingLabel }) {
               ? " Where one share costs more than the amount per stock, decide in advance whether to buy one share (a bigger weight) or leave that slot in cash; the backtest assumes part-shares."
               : ""}
           </p>
-          {f.buys.length ? <OrderTable rows={f.buys} kind="fresh" rankingLabel={rankingLabel} numbered /> : <p className="quiet-note">No stock qualifies: stay in cash this month.</p>}
+          {f.buys.length ? (
+            <OrderTable rows={f.buys} kind="fresh" rankingLabel={rankingLabel} numbered />
+          ) : (
+            <p className="quiet-note">
+              {o.breadth && o.breadth.riskOff ? "The market breadth rule says stay in cash this month." : "No stock qualifies: stay in cash this month."}
+            </p>
+          )}
           {f.reserve.length > 0 && (
             <details className="reserve">
               <summary>Next in line ({f.reserve.length})</summary>

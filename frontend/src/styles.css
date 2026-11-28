@@ -501,3 +501,14 @@ button, input, select { font: inherit; color: inherit; }
 .setup-A { background: #dff1ef; color: #0b6b67; }
 .setup-C { background: #fbefd8; color: #8a5a00; }
 .setup-table { margin-top: 6px; }
+
+/* market breadth */
+.banner-warn { background: #fdf0d8; color: #6b4300; border: 1px solid #f0d199; }
+.banner-note { background: var(--teal-100); color: var(--teal-900); }
+.live .banner, .orders .banner { margin: 10px 0; }
+.breadth-table { max-width: 640px; }
+.breadth-table tr.row-off td, .breadth-table tr.row-off th { background: #fdf0d8; }
+.breadth .link-btn { margin-top: 8px; }
+.breadth-table th, .breadth-table td { padding: 7px 14px; }
+.breadth-table th:first-child, .breadth-table td:first-child { padding-left: 10px; }
+.tag-latest { margin-left: 8px; font-size: 11px; font-weight: 600; color: var(--teal-900); background: var(--teal-100); border-radius: 6px; padding: 1px 6px; }

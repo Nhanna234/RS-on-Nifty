@@ -17,7 +17,7 @@ import bt_engine as E
 
 
 def _slice(d: dict, cols: list[str]) -> dict:
-    # cached Setup A + B signals (tuple keys) cover every stock, so they are left out and worked out again
+    # cached Setup A signals and market breadth (tuple keys) cover every stock, so they are left out and worked out again
     return {k: v[cols] if isinstance(v, pd.DataFrame) else v for k, v in d.items() if not isinstance(k, tuple)}
 
 

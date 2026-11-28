@@ -617,12 +617,21 @@ def entry_settings(req):
         "entry": "breakout" if req.get("entry") == "breakout" else "rs",
         # RS rule only: the RS a stock needs to be bought; never below the selling threshold (RULES.md 4.2)
         "buy_threshold": buy / 100.0,
+        # market breadth rule (RULES.md 4.13), for either entry rule
+        "breadth_rule": bool(req.get("breadthRule", d["breadthRule"])),
+        "breadth_level": num("breadthLevel", 10, 90) / 100.0,
         "near_high": num("nearHigh", 50, 100) / 100.0,
         "quiet": int(num("quiet", 1, 36)),
         "second": bool(req.get("second", d["second"])),
         "reset": min(num("reset", 50, 100), num("nearHigh", 50, 100)) / 100.0,
         "window": int(num("window", 1, 36)),
     }
+
+
+def breadth_row(p):
+    """Settings-sheet row describing the market breadth rule."""
+    return ("Market breadth rule",
+            f"Sell everything when breadth is below {p['breadth_level'] * 100:g}% and falling" if p.get("breadth_rule") else "Off")
 
 
 def buy_pct(p):
@@ -724,7 +733,7 @@ def bt_settings_rows(universe, start, end, p, market, bench_source):
         ("Stocks held", p["slots"]), ("RS threshold % (sell below)", p["threshold"] * 100),
         ("Price above 12-month EMA", "Yes" if p["use_ema"] else "No"),
         ("Min closing range %", p["cr_min"]), ("Min monthly return %", p["mr_min"]),
-        *entry_rows(p),
+        *entry_rows(p), breadth_row(p),
         ("Ranking", bt_engine.RANKINGS[p["ranking"]]), ("Cost per buy and per sell %", p["cost"] * 100),
         ("Cash yield % a year", p["cash_yield"] * 100), ("Starting capital", p["capital"]),
         ("Lending companies", "Excluded" if lenders.get("on") else "Included"),
@@ -789,7 +798,8 @@ def run_backtest(req, progress=None):
                      "cashYield": p["cash_yield"] * 100, "capital": p["capital"],
                      "ranking": p["ranking"], "rankingLabel": bt_engine.RANKINGS[p["ranking"]],
                      "entry": p["entry"], "entryLabel": bt_engine.ENTRY_RULES[p["entry"]],
-                     "buyThreshold": buy_pct(p)},
+                     "buyThreshold": buy_pct(p),
+                     "breadthRule": bool(p.get("breadth_rule")), "breadthLevel": p.get("breadth_level", 0.5) * 100},
         "benchmarkSource": bench_source,
         "notes": notes,
         "data": {"spikesRemoved": spikes, "downloaded": stats["full"] + stats["re-downloaded"],
@@ -929,7 +939,7 @@ def run_compare(req, progress=None, step=None):
     settings_rows = [
         ("Stocks held", p["slots"]), ("RS threshold % (sell below)", p["threshold"] * 100),
         ("Price above 12-month EMA", "Yes" if p["use_ema"] else "No"), ("Min closing range %", p["cr_min"]),
-        ("Min monthly return %", p["mr_min"]), *entry_rows(p), ("Ranking", bt_engine.RANKINGS[p["ranking"]]),
+        ("Min monthly return %", p["mr_min"]), *entry_rows(p), breadth_row(p), ("Ranking", bt_engine.RANKINGS[p["ranking"]]),
         ("Cost per buy and per sell %", p["cost"] * 100), ("Cash yield % a year", p["cash_yield"] * 100),
         ("Starting capital", p["capital"]),
         ("Lending companies", "Excluded" if req.get("excludeLenders", True) else "Included"),

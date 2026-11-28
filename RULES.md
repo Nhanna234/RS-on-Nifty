@@ -119,6 +119,8 @@ The **buy level** ("Buy at RS % or more") is the RS threshold unless you set a h
 2. its RS ratio is below the RS threshold (not the buy level), or cannot be computed ("RS below threshold");
 3. its close is below its 12-month EMA, if the EMA switch is on ("Close below 12-month EMA").
 
+On top of these, the market breadth rule (4.13) can sell every holding at once.
+
 A held stock is **never swapped** for a better candidate. It stays until a sell rule fires.
 
 **4.5 Trading at the next open.**
@@ -157,16 +159,24 @@ A held stock is **never swapped** for a better candidate. It stays until a sell 
 - **The 12-month high rolls.** Old prices drop out of the 12-month window, so a stock can come within 5% of its 12-month high because an older, higher close has dropped out, not because of a breakout. This is accepted (user's choice, 26 Nov 2026).
 - Trades, holdings, the orders panel and the running month show each stock's signal (A or C for second chance), and "How the trades went" shows results for each.
 
+**4.13 Market breadth rule (on by default).** Market breadth at a month-end = the share of the universe's stocks that have a close that month whose close is at or above their 12-month EMA (the same EMA as 4.4). The universe is the backtest's own: the chosen index or your CSV, after the lending and financial exclusions.
+- **Sell everything:** at a month-end when breadth is **below the level (50% by default) and lower than at the month-end before**, every holding is sold at the next month's first open (reason "Market breadth below 50% and falling", unless a stock's own sell rule also fired) and nothing is bought. The money waits in cash and earns the cash yield.
+- **Back to normal:** at any month-end when breadth is 50% or more, **or** higher than (or equal to) the month before, even below 50%, the normal buy and sell rules apply again. Stocks are then bought as usual (4.2, 4.3); the rule does not wait for 50%.
+- Checked **once a month only**, at the month-end close, like every other rule. Breadth during the month is ignored.
+- It works the same with the RS rule and with Setup A + second chance, and in the orders panel, the running month, Compare all indices and Test every start month. Each index in Compare uses its own breadth.
+- Breadth swinging around 50% can make the rule sell and buy back in consecutive months; each round costs the trading cost on the whole portfolio. Buffers tested to reduce this (ignoring moves under 3 or 5 points, a 48%/52% band, two falling months in a row) did worse in testing (research note, 28 Nov 2026).
+- The results show a **Market breadth** table (each decision month-end, breadth, change, decision), and the Excel file has a "Market breadth" sheet. Switch the rule off in the settings to see the strategy without it.
+
 ---
 
 ## 5. Current month and orders
 
-**5.1 Orders for the next open.** When the backtest ends at the last completed month, the app shows the orders for the next month's first open, decided at that month-end close (final, not provisional):
+**5.1 Orders for the next open.** When the backtest ends at the last completed month, the app shows the orders for the next month's first open, decided at that month-end close (final, not provisional). It first shows market breadth at that close and what the breadth rule (4.13) decides; when it says sell everything, "Start fresh" buys nothing and "Continue" sells every holding.
 - **Start fresh** (a new portfolio): the top qualifying stocks (4.2 or 4.12, ranked by 4.3), one per slot. Quantity = whole shares of (starting capital ÷ slots) at the month-end close; if one share costs more than that, the quantity is 0 and the app says so. "Next in line" lists five more; the backtest itself never uses them.
 - **Continue the backtest portfolio:** the backtest's own sells (with reasons), holdings to keep, and buys for the free slots, as portfolio weights.
 - If the latest closing prices have not reached Yahoo yet, the panel warns; the next run fetches them again (at most every 20 minutes; when most stocks lack the day, 5 are checked first, see 4.1).
 
-**5.2 The running month.** After the next month has started, the app shows that month's holdings (final: decided at the previous month-end) with their returns so far (provisional), and what the rules would sell and buy if the month closed at the latest prices (provisional until the month ends).
+**5.2 The running month.** After the next month has started, the app shows that month's holdings (final: decided at the previous month-end) with their returns so far (provisional), what breadth would be and what the breadth rule would decide if the month closed at the latest prices, and what the rules would sell and buy (all provisional until the month ends).
 
 ---
 
@@ -269,6 +279,7 @@ The values the code uses. This section is generated from the code; the website a
 | Backtest | Stocks held (slots) | 10 | settings.py `BT_DEFAULTS` |
 | Backtest | RS threshold (sell below it) | 98% | settings.py `BT_DEFAULTS` |
 | Backtest | RS rule: buy when RS is at least | same as the RS threshold | settings.py `BT_DEFAULTS` `buyThreshold` |
+| Backtest | Market breadth rule (sell everything, buy nothing) | on: when breadth is below 50% and lower than a month earlier; breadth = share of the universe's stocks closing at or above their 12-month EMA | settings.py `BT_DEFAULTS` `breadthRule`, `breadthLevel` |
 | Backtest | Price above 12-month EMA (entry and exit) | On | settings.py `BT_DEFAULTS` |
 | Backtest | Minimum closing range | 75% | settings.py `BT_DEFAULTS` |
 | Backtest | Minimum monthly return | 5% | settings.py `BT_DEFAULTS` |
@@ -309,6 +320,9 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 12. Change log
+
+**28 Nov 2026 (2)**
+- New **market breadth rule**, on by default (4.13): at a month-end when fewer than 50% of the universe's stocks close at or above their 12-month EMA **and** that share is lower than a month earlier, sell everything at the next open and buy nothing; back to the normal rules as soon as breadth is 50% or more, or rising. In testing (Nifty Total Market, 2016–2026 starts) it cut the usual worst fall from about −27% to between −12% and −17%, with about the same returns. The orders panel and the running month show breadth and the decision; results and Excel show a breadth table. Switch it off, or change the 50% level, in the backtest settings.
 
 **28 Nov 2026**
 - Backtest, RS rule: new setting **Buy at RS % or more** (4.2). A stock is bought only when its RS reaches this level; selling still happens when RS falls below the RS threshold, as before. It starts equal to the RS threshold, so results are unchanged unless you raise it (for example to 100, to buy only at a new 12-month RS high). It also applies to the orders panel, the comparison and the start-month test.

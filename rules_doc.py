@@ -74,6 +74,10 @@ def parameter_rows() -> list[tuple[str, str, str, str]]:
         ("Backtest", "RS rule: buy when RS is at least",
          "same as the RS threshold" if bd["buyThreshold"] is None else _pct(bd["buyThreshold"]) + " (never below the RS threshold)",
          "settings.py `BT_DEFAULTS` `buyThreshold`"),
+        ("Backtest", "Market breadth rule (sell everything, buy nothing)",
+         (f"on: when breadth is below {bd['breadthLevel']}% and lower than a month earlier" if bd["breadthRule"] else "off")
+         + "; breadth = share of the universe's stocks closing at or above their 12-month EMA",
+         "settings.py `BT_DEFAULTS` `breadthRule`, `breadthLevel`"),
         ("Backtest", "Price above 12-month EMA (entry and exit)", _yes(bd["useEma"]), "settings.py `BT_DEFAULTS`"),
         ("Backtest", "Minimum closing range", _pct(bd["cr"]), "settings.py `BT_DEFAULTS`"),
         ("Backtest", "Minimum monthly return", _pct(bd["mr"]), "settings.py `BT_DEFAULTS`"),
