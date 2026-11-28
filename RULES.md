@@ -104,17 +104,19 @@ Daily prices are then turned into monthly candles: open = the month's first open
 **Holidays and late data.** When at least half of the stocks that were fetched after the day's cutoff still lack that day's close (a market holiday the app does not know about, or Yahoo publishing late), the app asks Yahoo for 5 of them first. If none has the day yet, it waits 20 minutes before asking again instead of downloading every stock again. If any has it, all the missing stocks are fetched. When only a few stocks lack the day, they are fetched directly, as before.
 
 **4.2 Buy rule (checked at each month-end, for stocks not already held).** The backtest has two entry rules to choose from: the **RS rule** below (the default) and **Setup A + second chance** (4.12). With the RS rule, a stock qualifies when all of these are true:
-1. its RS ratio is 100%, **or** its RS ratio is at least the minimum RS threshold **and** higher than its RS ratio two month-ends earlier;
+1. its RS ratio is 100%, **or** its RS ratio is at least the **buy level** **and** higher than its RS ratio two month-ends earlier;
 2. close at or above its 12-month EMA (if the EMA switch is on);
 3. closing range at or above the minimum;
 4. monthly return at or above the minimum;
 5. a price exists at the next month's first open.
 
+The **buy level** ("Buy at RS % or more") is the RS threshold unless you set a higher one. Set it to 100 to buy only stocks at a new 12-month RS high; the "higher than two month-ends earlier" path then never applies. It cannot be below the RS threshold (a lower value is replaced by the threshold), because such a stock would be sold at the next month-end. The sell rule (4.4) always uses the RS threshold, not the buy level. Setup A + second chance (4.12) does not use the buy level.
+
 **4.3 Ranking.** If more stocks qualify than there are empty slots, they are sorted by the chosen ranking (closing range by default; or 6-month or 12-month price return), highest first; ties are broken by the higher RS ratio, then the higher monthly return, then the symbol in alphabetical order. The top ones fill the empty slots.
 
 **4.4 Sell rule (checked at each month-end, for stocks held).** A stock is sold at the next month's first open when, at the month-end, any of these is true (the first one found is the reason shown):
 1. it has no closing price that month ("Price data stopped");
-2. its RS ratio is below the minimum RS threshold, or cannot be computed ("RS below threshold");
+2. its RS ratio is below the RS threshold (not the buy level), or cannot be computed ("RS below threshold");
 3. its close is below its 12-month EMA, if the EMA switch is on ("Close below 12-month EMA").
 
 A held stock is **never swapped** for a better candidate. It stays until a sell rule fires.
@@ -226,7 +228,7 @@ These are recommendations for following the strategy with real money. The code d
 | | Screener | Backtest |
 |---|---|---|
 | Month used for the filters | The latest month, usually still running | Completed months only |
-| RS rule | Marked if at a 12-month high or at/above the threshold, in any shown month | At a 12-month high, or at/above the threshold **and** higher than 2 month-ends earlier |
+| RS rule | Marked if at a 12-month high or at/above the threshold, in any shown month | At a 12-month high, or at/above the buy level (the threshold by default) **and** higher than 2 month-ends earlier |
 | Ranking | None (sorted for display) | Closing range (or chosen ranking), then RS ratio, then monthly return |
 | History needed | 13 month-ends | 12 month-ends |
 | Prices | 3 years of Yahoo monthly prices | Daily prices from 2010, cleaned, turned into monthly candles |
@@ -265,7 +267,8 @@ The values the code uses. This section is generated from the code; the website a
 | Backtest | Default end month | the last completed month | bt_data.py `last_completed_month` |
 | Backtest | Earliest start month | 2012-01 | bt_data.py `EARLIEST_START` |
 | Backtest | Stocks held (slots) | 10 | settings.py `BT_DEFAULTS` |
-| Backtest | Minimum RS threshold | 98% | settings.py `BT_DEFAULTS` |
+| Backtest | RS threshold (sell below it) | 98% | settings.py `BT_DEFAULTS` |
+| Backtest | RS rule: buy when RS is at least | same as the RS threshold | settings.py `BT_DEFAULTS` `buyThreshold` |
 | Backtest | Price above 12-month EMA (entry and exit) | On | settings.py `BT_DEFAULTS` |
 | Backtest | Minimum closing range | 75% | settings.py `BT_DEFAULTS` |
 | Backtest | Minimum monthly return | 5% | settings.py `BT_DEFAULTS` |
@@ -306,6 +309,9 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 12. Change log
+
+**28 Nov 2026**
+- Backtest, RS rule: new setting **Buy at RS % or more** (4.2). A stock is bought only when its RS reaches this level; selling still happens when RS falls below the RS threshold, as before. It starts equal to the RS threshold, so results are unchanged unless you raise it (for example to 100, to buy only at a new 12-month RS high). It also applies to the orders panel, the comparison and the start-month test.
 
 **27 Nov 2026**
 - Faster start after the website has been asleep: a copy of all daily prices is now saved on GitHub twice every weekday (20:00 and 08:00 IST) by a scheduled job, and the website loads that copy when it starts instead of downloading 15 years of prices for every stock again (4.1). If the copy cannot be loaded, prices come from Yahoo as before. No change to any rule or result.

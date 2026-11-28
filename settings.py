@@ -57,6 +57,8 @@ RS_INDEX_TICKER = MARKETS["IN"]["rs_index"]  # Nifty 50 price index on Yahoo: th
 BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "threshold": 98, "useEma": True,
                "cr": 75, "mr": 5, "cost": 0.2, "cashYield": 6, "capital": 1000000, "ranking": "cr",
                "excludeLenders": True,
+    # RS rule: buy only when RS is at least this % (None = same as "threshold", the selling level)
+    "buyThreshold": None,
                # entry rule: "rs" (the RS rule) or "breakout" (Setup A with its second chance, RULES.md 4.12)
                "entry": "rs", "nearHigh": 95, "quiet": 12, "second": True, "reset": 95, "window": 12}
 

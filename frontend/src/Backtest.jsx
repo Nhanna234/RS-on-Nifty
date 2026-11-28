@@ -145,6 +145,10 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
   const endOf = (name) => marketInfo(name).end || defaults.end;
   const isUS = marketOf(s.index) === "US";
   const breakout = s.entry === "breakout";
+  // the buy level follows the selling threshold until it is changed
+  const buyLinked = s.buyThreshold === null || s.buyThreshold === undefined || s.buyThreshold === "";
+  const buyShown = buyLinked ? s.threshold : s.buyThreshold;
+  const buyTooLow = !buyLinked && Number(s.buyThreshold) < Number(s.threshold);
 
   const pickFiles = async (e) => {
     const picked = await Promise.all([...e.target.files].map(async (f) => ({ name: f.name, text: await f.text() })));
@@ -163,6 +167,8 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         end: s.end,
         slots: Math.round(n(s.slots, 1, 50, 10)),
         threshold: n(s.threshold, 50, 100, 98),
+        // empty = buy at the same RS as the selling threshold; never below it
+        buyThreshold: buyLinked ? null : Math.max(n(s.threshold, 50, 100, 98), n(s.buyThreshold, 50, 100, 100)),
         useEma: Boolean(s.useEma),
         cr: n(s.cr, 0, 100, 75),
         mr: n(s.mr, 0, 100, 5),
@@ -230,9 +236,28 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         <input id="b-slots" type="number" min="1" max="50" value={s.slots} onChange={set("slots")} />
       </div>
       <div className="field">
-        <label htmlFor="b-thr">Min RS threshold %</label>
+        <label htmlFor="b-thr" title="A held stock is sold when its RS falls below this">RS threshold % (sell below)</label>
         <input id="b-thr" type="number" min="50" max="100" step="0.5" value={s.threshold} onChange={set("threshold")} />
       </div>
+      {!breakout && (
+        <div className="field">
+          <label htmlFor="b-buy" title="A stock is bought only when its RS is at least this (100 = only at a new 12-month RS high)">
+            Buy at RS % or more
+          </label>
+          <input id="b-buy" type="number" min="50" max="100" step="0.5" value={buyShown} onChange={set("buyThreshold")} />
+          <span className="hint">
+            {buyLinked ? (
+              "Same as the sell threshold"
+            ) : buyTooLow ? (
+              "Below the sell threshold: the sell threshold is used"
+            ) : (
+              <button type="button" className="link-btn" onClick={() => setS((prev) => ({ ...prev, buyThreshold: null }))}>
+                Use the sell threshold
+              </button>
+            )}
+          </span>
+        </div>
+      )}
 
       <div className="field">
         <label htmlFor="b-cr">Min closing range %</label>
@@ -346,8 +371,8 @@ function BtIntro({ defaults }) {
       <div className="hero-text">
         <h2 className="hero-title">Hold the stocks at or near their 12-month RS high, month by month</h2>
         <p className="hero-sub">
-          At each month-end the backtest buys stocks whose RS is at a 12-month high, or above your minimum threshold and
-          higher than two months ago, that also pass the EMA, closing-range and monthly-return filters. They are bought
+          At each month-end the backtest buys stocks whose RS is at a 12-month high, or at least your buy level (the sell
+          threshold unless you set a higher one) and higher than two months ago, that also pass the EMA, closing-range and monthly-return filters. They are bought
           at the next month's first open, in equal slots. A stock is sold when its RS drops below the threshold or it
           closes below its 12-month EMA. Empty slots stay in cash.
         </p>
@@ -497,8 +522,9 @@ function BtResults({ result, dimmed }) {
 
       <p className="provenance">
         {universe.name} ({universe.source}): {universe.withData} of {universe.count} stocks had price data.{" "}
-        {period.start} to {period.end}, {period.months} months. Entry: {settings.entryLabel || "RS rule"}. Holding up to {settings.slots} stocks, RS threshold{" "}
-        {num(settings.threshold, 1)}%, ranked by {settings.rankingLabel.toLowerCase()}, {num(settings.cost, 2)}% cost per buy and
+        {period.start} to {period.end}, {period.months} months. Entry: {settings.entryLabel || "RS rule"}
+        {settings.entry !== "breakout" && settings.buyThreshold > settings.threshold ? `, buying at RS ${num(settings.buyThreshold, 1)}% or more` : ""}. Holding up to {settings.slots} stocks, RS threshold{" "}
+        {num(settings.threshold, 1)}% (sell below), ranked by {settings.rankingLabel.toLowerCase()}, {num(settings.cost, 2)}% cost per buy and
         per sell. Benchmark: {result.benchmarkSource}. Run at {result.asOf}.
       </p>
       <LenderNote lenders={result.lenders} />

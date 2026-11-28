@@ -607,8 +607,16 @@ def entry_settings(req):
         except (TypeError, ValueError):
             return float(d[key])
 
+    sell = num("threshold", 50, 100)
+    raw_buy = req.get("buyThreshold", d["buyThreshold"])
+    try:
+        buy = min(100.0, max(sell, float(raw_buy))) if raw_buy not in (None, "") else sell
+    except (TypeError, ValueError):
+        buy = sell
     return {
         "entry": "breakout" if req.get("entry") == "breakout" else "rs",
+        # RS rule only: the RS a stock needs to be bought; never below the selling threshold (RULES.md 4.2)
+        "buy_threshold": buy / 100.0,
         "near_high": num("nearHigh", 50, 100) / 100.0,
         "quiet": int(num("quiet", 1, 36)),
         "second": bool(req.get("second", d["second"])),
@@ -617,10 +625,16 @@ def entry_settings(req):
     }
 
 
+def buy_pct(p):
+    """The RS % needed to buy under the RS rule (the selling threshold unless a higher buy level is set)."""
+    return max(p["threshold"], p.get("buy_threshold") or p["threshold"]) * 100
+
+
 def entry_rows(p):
     """Settings-sheet rows describing the entry rule."""
     if p.get("entry") != "breakout":
-        return [("Entry rule", bt_engine.ENTRY_RULES["rs"])]
+        return [("Entry rule", bt_engine.ENTRY_RULES["rs"]),
+                ("Buy when RS is at least %", buy_pct(p))]
     return [
         ("Entry rule", bt_engine.ENTRY_RULES["breakout"]),
         ("Setup A: close at least % of the 12-month highest close", p["near_high"] * 100),
@@ -707,7 +721,7 @@ def bt_settings_rows(universe, start, end, p, market, bench_source):
     lenders = universe.get("lenders") or {}
     return [
         ("Universe", universe["name"]), ("Period", f"{start.strftime('%b %Y')} to {end.strftime('%b %Y')}"),
-        ("Stocks held", p["slots"]), ("Minimum RS threshold %", p["threshold"] * 100),
+        ("Stocks held", p["slots"]), ("RS threshold % (sell below)", p["threshold"] * 100),
         ("Price above 12-month EMA", "Yes" if p["use_ema"] else "No"),
         ("Min closing range %", p["cr_min"]), ("Min monthly return %", p["mr_min"]),
         *entry_rows(p),
@@ -774,7 +788,8 @@ def run_backtest(req, progress=None):
                      "cr": p["cr_min"], "mr": p["mr_min"], "cost": p["cost"] * 100,
                      "cashYield": p["cash_yield"] * 100, "capital": p["capital"],
                      "ranking": p["ranking"], "rankingLabel": bt_engine.RANKINGS[p["ranking"]],
-                     "entry": p["entry"], "entryLabel": bt_engine.ENTRY_RULES[p["entry"]]},
+                     "entry": p["entry"], "entryLabel": bt_engine.ENTRY_RULES[p["entry"]],
+                     "buyThreshold": buy_pct(p)},
         "benchmarkSource": bench_source,
         "notes": notes,
         "data": {"spikesRemoved": spikes, "downloaded": stats["full"] + stats["re-downloaded"],
@@ -912,7 +927,7 @@ def run_compare(req, progress=None, step=None):
     res = compare.run_all(monthly, ind, universes, p, periods, bench, bench_source, own,
                           progress=(lambda k, n, what: step(f"Backtesting {what} ({k} of {n})")) if step else None)
     settings_rows = [
-        ("Stocks held", p["slots"]), ("Minimum RS threshold %", p["threshold"] * 100),
+        ("Stocks held", p["slots"]), ("RS threshold % (sell below)", p["threshold"] * 100),
         ("Price above 12-month EMA", "Yes" if p["use_ema"] else "No"), ("Min closing range %", p["cr_min"]),
         ("Min monthly return %", p["mr_min"]), *entry_rows(p), ("Ranking", bt_engine.RANKINGS[p["ranking"]]),
         ("Cost per buy and per sell %", p["cost"] * 100), ("Cash yield % a year", p["cash_yield"] * 100),

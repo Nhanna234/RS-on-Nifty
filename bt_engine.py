@@ -5,7 +5,7 @@ Rules (decided at each month-end close, traded at the next month's first open):
 
 RS ratio  : relative strength (stock / RS index: Nifty 50, or S&P 500 for US) as a fraction of its highest month-end value
             in the past 12 months (the current month included), the same measure as the screener.
-ENTRY     : RS ratio = 100%, or RS ratio >= the minimum threshold and higher than 2 months ago;
+ENTRY     : RS ratio = 100%, or RS ratio >= the buy threshold (default: the RS threshold) and higher than 2 months ago;
             and close >= 12-month EMA (if switched on), month closing range >= minimum,
             month return >= minimum.
 RANKING   : when there are more candidates than empty slots: closing range (or 6- / 12-month
@@ -112,8 +112,9 @@ def indicators(m: dict, rs_index: pd.Series) -> dict:
 
 def eligible(ind: dict, p: dict, need_next_open: bool = True) -> pd.DataFrame:
     """True where a stock may be bought at that month-end. need_next_open=False is for the running
-    month, whose next open has not happened yet."""
-    ratio, thr = ind["ratio"], p["threshold"]
+    month, whose next open has not happened yet. The RS part uses the buy threshold (RULES.md 4.2), which is never
+    below the selling threshold; without one it is the selling threshold."""
+    ratio, thr = ind["ratio"], max(p["threshold"], p.get("buy_threshold") or p["threshold"])
     rs_ok = (ratio >= AT_HIGH) | ((ratio >= thr) & (ratio > ind["ratio2"]))
     ok = rs_ok & (ind["cr"] * 100 >= p["cr_min"]) & (ind["ret"] * 100 >= p["mr_min"])
     if need_next_open:
