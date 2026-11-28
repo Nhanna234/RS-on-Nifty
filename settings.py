@@ -59,8 +59,8 @@ BT_DEFAULTS = {"index": DEFAULT_INDEX, "start": "2015-01", "slots": 10, "thresho
                "excludeLenders": True,
     # backtest tab: also leave out every other Financial Services company (RULES.md 1.4); the screener keeps its own default
     "excludeFinancials": True,
-    # RS rule: buy only when RS is at least this % (None = same as "threshold", the selling level)
-    "buyThreshold": None,
+    # RS rule: buy only when RS is at least this %; set separately from "threshold" (the selling level), never below it
+    "buyThreshold": 95,
     # market breadth rule (RULES.md 4.13): sell everything and buy nothing at a month-end when breadth is below this %
     # and lower than a month earlier
     "breadthRule": True, "breadthLevel": 50,

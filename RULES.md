@@ -110,7 +110,7 @@ Daily prices are then turned into monthly candles: open = the month's first open
 4. monthly return at or above the minimum;
 5. a price exists at the next month's first open.
 
-The **buy level** ("Buy at RS % or more") is the RS threshold unless you set a higher one. Set it to 100 to buy only stocks at a new 12-month RS high; the "higher than two month-ends earlier" path then never applies. It cannot be below the RS threshold (a lower value is replaced by the threshold), because such a stock would be sold at the next month-end. The sell rule (4.4) always uses the RS threshold, not the buy level. Setup A + second chance (4.12) does not use the buy level.
+The **buy level** ("Buy at RS % or more") is set separately from the RS threshold; both start at 95%. Set it to 100 to buy only stocks at a new 12-month RS high; the "higher than two month-ends earlier" path then never applies. It cannot be below the RS threshold (a lower value is replaced by the threshold), because such a stock would be sold at the next month-end. The sell rule (4.4) always uses the RS threshold, not the buy level. Setup A + second chance (4.12) does not use the buy level.
 
 **4.3 Ranking.** If more stocks qualify than there are empty slots, they are sorted by the chosen ranking (closing range by default; or 6-month or 12-month price return), highest first; ties are broken by the higher RS ratio, then the higher monthly return, then the symbol in alphabetical order. The top ones fill the empty slots.
 
@@ -238,7 +238,7 @@ These are recommendations for following the strategy with real money. The code d
 | | Screener | Backtest |
 |---|---|---|
 | Month used for the filters | The latest month, usually still running | Completed months only |
-| RS rule | Marked if at a 12-month high or at/above the threshold, in any shown month | At a 12-month high, or at/above the buy level (the threshold by default) **and** higher than 2 month-ends earlier |
+| RS rule | Marked if at a 12-month high or at/above the threshold, in any shown month | At a 12-month high, or at/above the buy level **and** higher than 2 month-ends earlier |
 | Ranking | None (sorted for display) | Closing range (or chosen ranking), then RS ratio, then monthly return |
 | History needed | 13 month-ends | 12 month-ends |
 | Prices | 3 years of Yahoo monthly prices | Daily prices from 2010, cleaned, turned into monthly candles |
@@ -313,7 +313,7 @@ The values the code uses. This section is generated from the code; the website a
 | Backtest | Earliest start month | 2012-01 | bt_data.py `EARLIEST_START` |
 | Backtest | Stocks held (slots) | 10 | settings.py `BT_DEFAULTS` |
 | Backtest | RS threshold (sell below it) | 95% | settings.py `BT_DEFAULTS` |
-| Backtest | RS rule: buy when RS is at least | same as the RS threshold | settings.py `BT_DEFAULTS` `buyThreshold` |
+| Backtest | RS rule: buy when RS is at least | 95% (set separately; never below the RS threshold) | settings.py `BT_DEFAULTS` `buyThreshold` |
 | Backtest | Market breadth rule (sell everything, buy nothing) | on: when breadth is below 50% and lower than a month earlier; breadth = share of the universe's stocks closing at or above their 12-month EMA | settings.py `BT_DEFAULTS` `breadthRule`, `breadthLevel` |
 | Backtest | Price above 12-month EMA (entry and exit) | On | settings.py `BT_DEFAULTS` |
 | Backtest | Minimum closing range | 75% | settings.py `BT_DEFAULTS` |
@@ -366,6 +366,9 @@ The values the code uses. This section is generated from the code; the website a
 ---
 
 ## 13. Change log
+
+**28 Nov 2026 (5)**
+- The **Buy at RS** and **RS threshold (sell below)** boxes are now fully separate. Before, the buy box followed the sell box and jumped back to the sell value when it was cleared, so a different buy level could not be typed in. Both start at 95%. A buy level below the sell level is still replaced by the sell level.
 
 **28 Nov 2026 (4)**
 - The Abdullah Dashboard is now part of this website: two new tabs, **Market breadth** (daily trend state of the Nifty 50, Midcap 150 and Smallcap 250, regime, Nifty 500 participation) and **Sector rotation** (Rank(1,3,6) of the sectoral and thematic indices, with the RS screen of their strongest stocks). Same calculations as the dashboard (section 11); the breadth page now reads the stock prices this app already stores instead of downloading 500 histories. The separate dashboard site is unchanged.

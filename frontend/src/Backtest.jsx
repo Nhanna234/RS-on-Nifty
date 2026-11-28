@@ -146,9 +146,9 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
   const isUS = marketOf(s.index) === "US";
   const breakout = s.entry === "breakout";
   // the buy level follows the selling threshold until it is changed
-  const buyLinked = s.buyThreshold === null || s.buyThreshold === undefined || s.buyThreshold === "";
-  const buyShown = buyLinked ? s.threshold : s.buyThreshold;
-  const buyTooLow = !buyLinked && Number(s.buyThreshold) < Number(s.threshold);
+  // the buy and sell levels are set separately; a buy level below the sell level is replaced by the sell level
+  const buyShown = s.buyThreshold ?? defaults.buyThreshold ?? defaults.threshold ?? 95;
+  const buyTooLow = buyShown !== "" && Number(buyShown) < Number(s.threshold);
 
   const pickFiles = async (e) => {
     const picked = await Promise.all([...e.target.files].map(async (f) => ({ name: f.name, text: await f.text() })));
@@ -168,7 +168,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
         slots: Math.round(n(s.slots, 1, 50, 10)),
         threshold: n(s.threshold, 50, 100, defaults.threshold ?? 95),
         // empty = buy at the same RS as the selling threshold; never below it
-        buyThreshold: buyLinked ? null : Math.max(n(s.threshold, 50, 100, defaults.threshold ?? 95), n(s.buyThreshold, 50, 100, 100)),
+        buyThreshold: Math.max(n(s.threshold, 50, 100, defaults.threshold ?? 95), n(buyShown, 50, 100, defaults.threshold ?? 95)),
         useEma: Boolean(s.useEma),
         cr: n(s.cr, 0, 100, 75),
         mr: n(s.mr, 0, 100, 5),
@@ -247,17 +247,7 @@ function BtControls({ indices, defaults, running, busy, onRun, onCompare, cmpRun
             Buy at RS % or more
           </label>
           <input id="b-buy" type="number" min="50" max="100" step="0.5" value={buyShown} onChange={set("buyThreshold")} />
-          <span className="hint">
-            {buyLinked ? (
-              "Same as the sell threshold"
-            ) : buyTooLow ? (
-              "Below the sell threshold: the sell threshold is used"
-            ) : (
-              <button type="button" className="link-btn" onClick={() => setS((prev) => ({ ...prev, buyThreshold: null }))}>
-                Use the sell threshold
-              </button>
-            )}
-          </span>
+          {buyTooLow && <span className="hint">Below the sell threshold: the sell threshold is used</span>}
         </div>
       )}
 

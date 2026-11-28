@@ -75,7 +75,7 @@ def parameter_rows() -> list[tuple[str, str, str, str]]:
         ("Backtest", "Stocks held (slots)", str(bd["slots"]), "settings.py `BT_DEFAULTS`"),
         ("Backtest", "RS threshold (sell below it)", _pct(bd["threshold"]), "settings.py `BT_DEFAULTS`"),
         ("Backtest", "RS rule: buy when RS is at least",
-         "same as the RS threshold" if bd["buyThreshold"] is None else _pct(bd["buyThreshold"]) + " (never below the RS threshold)",
+         _pct(bd["buyThreshold"]) + " (set separately; never below the RS threshold)",
          "settings.py `BT_DEFAULTS` `buyThreshold`"),
         ("Backtest", "Market breadth rule (sell everything, buy nothing)",
          (f"on: when breadth is below {bd['breadthLevel']}% and lower than a month earlier" if bd["breadthRule"] else "off")
